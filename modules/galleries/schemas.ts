@@ -30,9 +30,19 @@ export const SHARE_LEVEL_LABELS: Record<ShareLevel, string> = { read: 'Sehen', e
 /** Bildvarianten (vom Server mit `core.images` erzeugt) */
 export const IMAGE_VARIANTS = ['thumb', 'web', 'full'] as const;
 export type ImageVariant = (typeof IMAGE_VARIANTS)[number];
+/**
+ * Abrufbare Dateien: Bildvarianten plus `video` (nur bei Videos: die Videodatei zum Abspielen, mit
+ * Range-Anfragen). Bei Videos sind `thumb`/`web` Vorschaubilder und `full` der Download des Videos.
+ */
+export const MEDIA_VARIANTS = ['thumb', 'web', 'full', 'video'] as const;
+export type MediaVariant = (typeof MEDIA_VARIANTS)[number];
 /** Für die Website freigegebene Varianten (`full` nur intern) */
-export const WEBSITE_VARIANTS = ['thumb', 'web'] as const;
+export const WEBSITE_VARIANTS = ['thumb', 'web', 'video'] as const;
 export type WebsiteVariant = (typeof WEBSITE_VARIANTS)[number];
+
+/** Art eines Eintrags der Galerie */
+export const MEDIA_TYPES = ['image', 'video'] as const;
+export type MediaType = (typeof MEDIA_TYPES)[number];
 
 /** Annahme beim Upload (Inhalt wird serverseitig zusätzlich per sharp geprüft) */
 export const IMAGE_CONTENT_TYPES = [
@@ -44,6 +54,30 @@ export const IMAGE_CONTENT_TYPES = [
 ] as const;
 export const IMAGE_ACCEPT = IMAGE_CONTENT_TYPES.join(',');
 export const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+/**
+ * Videos (Inhalt wird per Magic Bytes geprüft, nicht neu kodiert): MP4/M4V, MOV (iPhone), WebM.
+ * Abspielbar ist, was der Browser kann (H.264 überall, HEVC/MOV v. a. Safari).
+ */
+export const VIDEO_CONTENT_TYPES = ['video/mp4', 'video/quicktime', 'video/webm'] as const;
+export type VideoContentTypeName = (typeof VIDEO_CONTENT_TYPES)[number];
+/** Dateiendungen → Videotyp (Browser melden bei `.mov`/`.m4v` teils keinen oder einen anderen Typ) */
+export const VIDEO_EXTENSIONS: Readonly<Record<string, VideoContentTypeName>> = {
+	mp4: 'video/mp4',
+	m4v: 'video/mp4',
+	mov: 'video/quicktime',
+	qt: 'video/quicktime',
+	webm: 'video/webm'
+};
+export const VIDEO_ACCEPT = [...VIDEO_CONTENT_TYPES, '.mp4', '.m4v', '.mov', '.webm'].join(',');
+/** Bilder und Videos zusammen (Dateiauswahl) */
+export const MEDIA_ACCEPT = `${IMAGE_ACCEPT},${VIDEO_ACCEPT}`;
+/**
+ * Obergrenze je Video (ein Request, unter `BODY_SIZE_LIMIT` 110 MB); es gilt zusätzlich die
+ * Speichergrenze `core.storage.maxFileSizeMb` (siehe `GET /limits`)
+ */
+export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+/** Höchste Laufzeit, die als `duration` angenommen wird (Sekunden) */
+export const MAX_VIDEO_DURATION = 24 * 60 * 60;
 export const MAX_IMAGES_PER_GALLERY = 2000;
 export const MAX_EVENTS_PER_GALLERY = 20;
 export const MAX_SHARES = 200;
@@ -123,8 +157,19 @@ export type GalleryInput = z.infer<typeof galleryInput>;
 /** PUT `/galleries/:id/cover` – `null` = Standard (zuerst hochgeladenes Bild) */
 export const coverInput = z.object({ imageId: z.uuid('Ungültige ID').nullable() }).strict();
 
-/** Textfelder des Upload-Formulars (multipart; Datei im Feld `file`) */
-export const uploadFields = z.object({ description: optionalText(MAX_IMAGE_DESCRIPTION) });
+/**
+ * Textfelder des Upload-Formulars (multipart; Datei im Feld `file`). Bei Videos zusätzlich Pflichtfeld
+ * `poster` (Vorschaubild, JPEG/PNG/WebP) und optional `duration` (Laufzeit in Sekunden).
+ */
+export const uploadFields = z.object({
+	description: optionalText(MAX_IMAGE_DESCRIPTION),
+	duration: z.coerce
+		.number()
+		.min(0, 'Ungültige Laufzeit')
+		.max(MAX_VIDEO_DURATION, 'Ungültige Laufzeit')
+		.nullish()
+		.transform((v) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10) / 10))
+});
 
 /**
  * PUT `/galleries/:id/images/:imageId` – ersetzt die Beschreibung; `isPrivate` (optional, sonst
@@ -160,7 +205,7 @@ export const imageParams = z.object({
 	id: z.uuid('Ungültige ID'),
 	imageId: z.uuid('Ungültige ID')
 });
-export const variantParams = imageParams.extend({ variant: z.enum(IMAGE_VARIANTS) });
+export const variantParams = imageParams.extend({ variant: z.enum(MEDIA_VARIANTS) });
 export const websiteVariantParams = imageParams.extend({ variant: z.enum(WEBSITE_VARIANTS) });
 
 export const listQuery = z.object({
@@ -248,6 +293,10 @@ export interface GalleryImage {
 	contentType: string;
 	originalName: string;
 	position: number;
+	/** `video`: `contentType`/`sizeBytes` gehören zum Video, Maße zum Vorschaubild */
+	mediaType: MediaType;
+	/** Laufzeit in Sekunden (nur Videos, falls bekannt) */
+	durationSeconds: number | null;
 	/** Nur intern: nie über die Website-API, auch wenn die Galerie öffentlich ist */
 	isPrivate: boolean;
 	uploadedBy: string | null;
@@ -279,6 +328,14 @@ export interface BulkResult {
 	affected: number;
 }
 
+/** `GET /limits` – Grenzen für den Upload (Speicher-Einstellungen eingerechnet) */
+export interface UploadLimits {
+	maxImageBytes: number;
+	maxVideoBytes: number;
+	/** `false`, wenn der Dateispeicher Videotypen nicht zulässt (`core.storage.allowedContentTypes`) */
+	videosAllowed: boolean;
+}
+
 // Website (nur öffentliche Felder: keine Freigaben, Eigentümer*innen, Dateinamen, Uploader)
 export interface WebsiteEventRef {
 	id: string;
@@ -305,13 +362,36 @@ export interface WebsiteImage {
 	width: number;
 	height: number;
 	position: number;
+	/** `video`: abspielen über die Variante `video`, `thumb`/`web` sind Vorschaubilder */
+	mediaType: MediaType;
+	durationSeconds: number | null;
 }
 
 export interface WebsiteGalleryDetail extends WebsiteGallery {
 	images: WebsiteImage[];
 }
 
-/** Relativer Pfad der Bilddatei für `apiFetch`/`<img src>` (intern) */
-export function imageUrl(galleryId: string, imageId: string, variant: ImageVariant): string {
+/** Relativer Pfad der Bild- bzw. Videodatei für `apiFetch`/`<img src>` (intern) */
+export function imageUrl(galleryId: string, imageId: string, variant: MediaVariant): string {
 	return `/api/v1/modules/galleries/galleries/${galleryId}/images/${imageId}/${variant}`;
+}
+
+/** Videotyp einer Datei nach Browser-Angabe oder Endung; `null` = kein Video */
+export function videoTypeOf(file: { type: string; name: string }): VideoContentTypeName | null {
+	const type = file.type.toLowerCase();
+	if ((VIDEO_CONTENT_TYPES as readonly string[]).includes(type))
+		return type as VideoContentTypeName;
+	if (type === 'video/x-m4v') return 'video/mp4';
+	const ext = /\.([A-Za-z0-9]+)$/.exec(file.name)?.[1]?.toLowerCase();
+	return ext ? (VIDEO_EXTENSIONS[ext] ?? null) : null;
+}
+
+/** Laufzeit als `m:ss` bzw. `h:mm:ss` */
+export function formatDuration(seconds: number | null | undefined): string {
+	if (seconds == null || !Number.isFinite(seconds)) return '';
+	const total = Math.max(0, Math.round(seconds));
+	const h = Math.floor(total / 3600);
+	const m = Math.floor((total % 3600) / 60);
+	const s = String(total % 60).padStart(2, '0');
+	return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
 }

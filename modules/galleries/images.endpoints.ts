@@ -5,35 +5,27 @@ import {
 	defineEndpoint,
 	errors,
 	IMAGE_RATE_LIMIT,
-	principalKeysFor,
-	readFormData,
-	rowsOf,
-	takeUpload
+	principalKeysFor
 } from '$lib/sdk/server';
 import { requireAccess } from './access';
-import { VARIANT_SPECS, db, fileResponse, filesCtx, removeFiles, variantPath } from './files';
+import { db, fileResponse, rangeFileResponse, removeFiles } from './files';
 import {
 	downloadName,
 	imagePathsOf,
 	requireImageRow,
 	requireImagesOfGallery,
-	sanitizeOriginalName,
 	toGalleryImage
 } from './images.service';
+import { uploadMedia } from './upload.service';
 import {
-	IMAGE_CONTENT_TYPES,
-	MAX_IMAGES_PER_GALLERY,
-	MAX_IMAGE_BYTES,
 	MODULE_ID,
 	idParams,
 	imageBulkInput,
 	imageParams,
 	imageUpdateInput,
-	uploadFields,
 	variantParams,
 	type BulkResult,
-	type GalleryImage,
-	type ImageVariant
+	type GalleryImage
 } from './schemas';
 
 const tags = ['Modul: galleries'];
@@ -99,104 +91,19 @@ export const imagesEndpoints: AnyApiEndpoint[] = [
 	defineEndpoint({
 		method: 'POST',
 		path: '/galleries/:id/images',
-		summary: 'Bild hochladen (multipart, Feld "file", optional "description")',
+		summary: 'Bild oder Video hochladen (multipart, Feld "file", optional "description")',
 		description:
-			'Ein Request je Datei. Erlaubt: JPEG, PNG, WebP, AVIF, GIF bis 25 MB. Metadaten (EXIF/GPS) werden entfernt.',
+			'Ein Request je Datei. Bilder: JPEG, PNG, WebP, AVIF, GIF bis 25 MB, Metadaten (EXIF/GPS) werden ' +
+			'entfernt. Videos: MP4/M4V, MOV oder WebM bis 100 MB (bzw. `core.storage.maxFileSizeMb`), dazu ' +
+			'Pflichtfeld `poster` (Vorschaubild JPEG/PNG/WebP, z. B. ein Einzelbild) und optional ' +
+			'`duration` (Sekunden). Videos werden nicht neu kodiert; Metadaten (Ort, Gerät) werden ' +
+			'entfernt. Der Dateispeicher muss die Videotypen zulassen (siehe `GET /limits`), sonst 422.',
 		tags,
 		permission: 'galleries.gallery.view',
 		params: idParams,
 		handler: async ({ ctx, params, request }): Promise<GalleryImage> => {
-			const galleryId = params.id;
 			const keys = await principalKeysFor(ctx, MODULE_ID);
-			const form = await readFormData(request);
-			// Typ/leer/fehlend → 422, Größe → 413 (#33); den Bildinhalt prüft core.images.process
-			const file = await takeUpload(form, {
-				maxBytes: MAX_IMAGE_BYTES,
-				allowedTypes: IMAGE_CONTENT_TYPES,
-				typesLabel: 'JPEG, PNG, WebP, AVIF oder GIF',
-				detectMissingType: true,
-				sniff: false
-			});
-			const rawDescription = form.get('description');
-			if (rawDescription != null && typeof rawDescription !== 'string') {
-				throw errors.badRequest('Feld "description" muss Text sein');
-			}
-			const fields = uploadFields.parse({ description: rawDescription });
-
-			await db().transaction(async (tx) => {
-				await requireAccess(tx, ctx, galleryId, keys, 'edit');
-				const [r] = await rowsOf(
-					tx,
-					sql`SELECT count(*)::int AS n FROM gallery_images WHERE gallery_id = ${galleryId}`
-				);
-				if (Number(r?.n ?? 0) >= MAX_IMAGES_PER_GALLERY) {
-					throw errors.conflict(`Höchstens ${MAX_IMAGES_PER_GALLERY} Bilder je Galerie`);
-				}
-			});
-
-			const bytes = file.bytes;
-			const processed = await core.images.process(bytes, {
-				variants: VARIANT_SPECS,
-				maxInputBytes: MAX_IMAGE_BYTES
-			});
-			const full = processed.variants.find((v) => v.name === 'full');
-			if (!full) throw errors.unavailable('Bildverarbeitung lieferte keine Vollansicht');
-
-			const imageId = crypto.randomUUID();
-			const originalName = sanitizeOriginalName(file.name);
-			const paths: Partial<Record<ImageVariant, string>> = {};
-			const uploaded: string[] = [];
-			try {
-				for (const spec of VARIANT_SPECS) {
-					const variant = processed.variants.find((v) => v.name === spec.name);
-					if (!variant) throw errors.unavailable('Bildverarbeitung unvollständig');
-					const name = spec.name as ImageVariant;
-					const path = variantPath(galleryId, imageId, name, variant.extension);
-					await core.storage.upload(filesCtx(), {
-						module: MODULE_ID,
-						path,
-						file: variant.bytes,
-						contentType: variant.contentType,
-						name: `${imageId}-${spec.name}.${variant.extension}`
-					});
-					uploaded.push(path);
-					paths[name] = path;
-				}
-			} catch (e) {
-				await removeFiles(uploaded);
-				throw e;
-			}
-
-			let row: Record<string, unknown>;
-			try {
-				row = await db().transaction(async (tx) => {
-					await requireAccess(tx, ctx, galleryId, keys, 'edit');
-					// MAX(position) nur unter Sperre je Galerie (parallele Uploads, #73)
-					await tx.execute(
-						sql`SELECT pg_advisory_xact_lock(hashtext(${'galleries:images:' + galleryId}))`
-					);
-					await tx.execute(
-						sql`INSERT INTO gallery_images (id, gallery_id, description, position, original_name,
-								content_type, width, height, size_bytes, thumb_path, web_path, full_path, uploaded_by)
-							VALUES (${imageId}, ${galleryId}, ${fields.description},
-								(SELECT COALESCE(MAX(position), -1) + 1 FROM gallery_images WHERE gallery_id = ${galleryId}),
-								${originalName}, ${full.contentType}, ${processed.width}, ${processed.height},
-								${full.bytes.byteLength}, ${paths.thumb!}, ${paths.web!}, ${paths.full!},
-								${ctx.userId ?? null})`
-					);
-					await tx.execute(sql`UPDATE galleries SET updated_at = now() WHERE id = ${galleryId}`);
-					return requireImageRow(tx, galleryId, imageId);
-				});
-			} catch (e) {
-				await removeFiles(uploaded);
-				throw e;
-			}
-
-			await core.audit.logFromContext(ctx, 'galleries.image.uploaded', {
-				target: galleryId,
-				metadata: { imageId, count: 1 }
-			});
-			return toGalleryImage(row);
+			return uploadMedia(ctx, params.id, keys, request);
 		}
 	}),
 
@@ -263,20 +170,38 @@ export const imagesEndpoints: AnyApiEndpoint[] = [
 	defineEndpoint({
 		method: 'GET',
 		path: '/galleries/:id/images/:imageId/:variant',
-		summary: 'Bilddatei abrufen (thumb, web, full)',
-		description: '`full` wird als Download (content-disposition: attachment) ausgeliefert.',
+		summary: 'Bild- oder Videodatei abrufen (thumb, web, full, video)',
+		description:
+			'`full` wird als Download (content-disposition: attachment) ausgeliefert. Bei Videos sind ' +
+			'`thumb`/`web` Vorschaubilder, `full` ist der Download und `video` die Datei zum Abspielen ' +
+			'(beide beantworten `Range`-Anfragen mit 206); `video` bei einem Bild → 404.',
 		tags,
 		permission: 'galleries.gallery.view',
 		params: variantParams,
 		// eigenes Kontingent: eine Galerie lädt Hunderte Vorschaubilder (#23)
 		rateLimit: IMAGE_RATE_LIMIT,
-		handler: async ({ ctx, params }) => {
+		handler: async ({ ctx, params, request }) => {
 			const keys = await principalKeysFor(ctx, MODULE_ID);
 			const image = await db().transaction(async (tx) => {
 				await requireAccess(tx, ctx, params.id, keys, 'read');
 				return imagePathsOf(await requireImageRow(tx, params.id, params.imageId));
 			});
+			if (params.variant === 'video') {
+				if (image.mediaType !== 'video') throw errors.notFound('Kein Video');
+				return rangeFileResponse(request, image.paths.full, {
+					cache: 'private, max-age=3600',
+					contentType: image.contentType,
+					name: downloadName(image.originalName, image.paths.full)
+				});
+			}
 			const path = image.paths[params.variant];
+			if (params.variant === 'full' && image.mediaType === 'video') {
+				return rangeFileResponse(request, path, {
+					cache: 'private, max-age=3600',
+					contentType: image.contentType,
+					attachmentName: downloadName(image.originalName, path)
+				});
+			}
 			return fileResponse(path, {
 				cache: 'private, max-age=3600',
 				attachmentName:

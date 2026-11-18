@@ -16,6 +16,7 @@ import {
 } from '$lib/sdk/server';
 import { loadShares, requireAccess } from './access';
 import { effectiveCover, eventsService } from './files';
+import { durationOf, mediaTypeOf } from './images.service';
 import {
 	MODULE_ID,
 	type EventRef,
@@ -136,7 +137,7 @@ export async function loadDetailData(
 	const images = await rowsOf(
 		tx,
 		sql`SELECT id, description, width, height, size_bytes, content_type, original_name,
-				uploaded_by, created_at, is_private
+				uploaded_by, created_at, is_private, media_type, duration_seconds
 			FROM gallery_images WHERE gallery_id = ${galleryId} ORDER BY created_at, id`
 	);
 	const eventIds = await loadEventIds(tx, galleryId);
@@ -252,6 +253,8 @@ export async function finishDetail(ctx: RequestContext, d: DetailData): Promise<
 			contentType: String(r.content_type),
 			originalName: String(r.original_name),
 			position,
+			mediaType: mediaTypeOf(r),
+			durationSeconds: durationOf(r),
 			isPrivate: r.is_private === true || r.is_private === 't',
 			uploadedBy: textOrNull(r.uploaded_by),
 			createdAt: toIso(r.created_at)

@@ -2,8 +2,8 @@
 	"schema": 1,
 	"id": "galleries",
 	"name": "Galerien",
-	"description": "Bildergalerien mit Freigaben, Termin-Zuordnung und Stammeswebsite",
-	"version": "1.4.0",
+	"description": "Bilder- und Videogalerien mit Freigaben, Termin-Zuordnung und Stammeswebsite",
+	"version": "1.5.0",
 	"core": ">=2.0.0-0 <3.0.0",
 	"dependencies": {},
 	"optionalDependencies": {

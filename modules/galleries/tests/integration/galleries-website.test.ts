@@ -243,7 +243,16 @@ const GALLERY_KEYS = [
 	'title',
 	'updatedAt'
 ].sort();
-const IMAGE_KEYS = ['description', 'galleryId', 'height', 'id', 'position', 'width'].sort();
+const IMAGE_KEYS = [
+	'description',
+	'durationSeconds',
+	'galleryId',
+	'height',
+	'id',
+	'mediaType',
+	'position',
+	'width'
+].sort();
 const FORBIDDEN_TEXT = [
 	'ownerId',
 	'shares',

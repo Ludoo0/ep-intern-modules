@@ -258,7 +258,7 @@ describe('Abfragen', () => {
 describe('Varianten', () => {
 	it('Konstanten', () => {
 		expect([...IMAGE_VARIANTS]).toEqual(['thumb', 'web', 'full']);
-		expect([...WEBSITE_VARIANTS]).toEqual(['thumb', 'web']);
+		expect([...WEBSITE_VARIANTS]).toEqual(['thumb', 'web', 'video']);
 	});
 
 	it('variantParams erlaubt full, websiteVariantParams nicht', () => {
@@ -269,6 +269,8 @@ describe('Varianten', () => {
 		expect(websiteVariantParams.safeParse({ ...base, variant: 'thumb' }).success).toBe(true);
 		expect(websiteVariantParams.safeParse({ ...base, variant: 'web' }).success).toBe(true);
 		expect(websiteVariantParams.safeParse({ ...base, variant: 'full' }).success).toBe(false);
+		expect(websiteVariantParams.safeParse({ ...base, variant: 'video' }).success).toBe(true);
+		expect(variantParams.safeParse({ ...base, variant: 'video' }).success).toBe(true);
 		expect(variantParams.safeParse({ ...base, variant: 'original' }).success).toBe(false);
 		expect(variantParams.safeParse({ ...base, id: 'x', variant: 'web' }).success).toBe(false);
 		expect(variantParams.safeParse({ ...base, imageId: 'x', variant: 'web' }).success).toBe(false);

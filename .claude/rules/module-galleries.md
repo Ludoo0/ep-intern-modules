@@ -4,7 +4,7 @@ paths: ["modules/galleries/**", "tests/**/galleries*", "src/lib/server/core/imag
 
 # Modul `galleries` (Galerien)
 
-Fotos intern sammeln und ausgewählte Galerien auf der **Stammeswebsite** zeigen. Schema `mod_galleries`, Version 1.4.0,
+Fotos **und Videos** (seit 1.5.0) intern sammeln und ausgewählte Galerien auf der **Stammeswebsite** zeigen. Schema `mod_galleries`, Version 1.5.0,
 startet deaktiviert, keine harten Abhängigkeiten; `optionalDependencies: ['members', 'events']` (Gruppen/Mitglieder als
 Freigabe-Ziele, Termine für die Zuordnung **ganzer Galerien** (nicht einzelner Bilder) – ohne `events` entfällt die Zuordnung still, Eingabe → 422).
 Freigabe nach dem Muster `events` (**Freigabe an Principals**, siehe `architecture.md`), dazu je Galerie **öffentlich/privat**
@@ -22,8 +22,11 @@ Bildverarbeitung serverseitig über den Core-Dienst `core.images` (sharp). Navig
 | `galleries.service.ts` | `loadShares`/`replaceShares`, Termine der Galerie: `loadEventIds`, `eventIdsByGallery`, `replaceGalleryEvents`, `validateEventIds(ctx, ids, keep)`, `describeEvents`/`pickEvents`; `loadDetailData` (in der Transaktion, prüft Lesezugriff) + `finishDetail` (danach: Eigentümer*in, Termine, Freigaben), `buildGalleryDetail(ctx, id, keys)`, `describeShares`, `everyoneLabel()` (Einstellung `events.stamm.name`, sonst „Stamm“), `iso`, `likePattern` |
 | `images.service.ts` | `IMAGE_COLUMNS` (Alias `i`), `toGalleryImage`, `requireImageRow`/`requireImagesOfGallery`, `imagePathsOf`, `sanitizeOriginalName`, `downloadName` |
 | `galleries.endpoints.ts` | CRUD `/galleries`, Titelbild `/galleries/:id/cover` |
-| `images.endpoints.ts` | Upload, Bearbeiten, Sammelaktionen, Löschen, Auslieferung der Varianten |
-| `meta.endpoints.ts` | `/principals`, `/events` (Terminsuche über den `events`-Dienst), `/settings/stamm` → `{ name }` (für `everyoneLabel`) |
+| `images.endpoints.ts` | Upload (→ `upload.service.ts`), Bearbeiten, Sammelaktionen, Löschen, Auslieferung der Varianten (Videos mit Range) |
+| `upload.service.ts` | `uploadMedia`: Bild (`core.images`, drei Varianten) oder Video (Typ per Magic Bytes, Metadaten entfernt, Pflichtfeld `poster` → `thumb`/`web`, `full_path` = Video) |
+| `video.ts` | rein: `sniffVideoType` (MP4/MOV/WebM; AVIF/HEIC/Matroska abgelehnt), `stripVideoMetadata` (siehe Videos) |
+| `pages/video-poster.ts` | Browser: Einzelbild (bei ≈ 1 s bzw. 10 %) als JPEG + Laufzeit; nicht dekodierbar → Platzhalter |
+| `meta.endpoints.ts` | `/principals`, `/events` (Terminsuche über den `events`-Dienst), `/settings/stamm` → `{ name }` (für `everyoneLabel`), `/limits` → `UploadLimits` |
 | `website.endpoints.ts` | `/website/galleries[/:id]` (mit Website-Terminen, Filter `eventId`), Bilddateien `thumb`/`web` |
 | `website.schemas.ts` | Zod-Vertrag der Website-DTOs (#48): `websiteGallerySchema`, `websiteGalleryDetailSchema`, `websiteGalleryListSchema`, `websiteEventRefSchema`; Typgleichheit zu den DTOs geprüft, Integrationstests parsen die Antworten dagegen |
 | `assist.ts` | KI-Schreibhilfe (`galleries.ai.use`): Galerie- und Bildbeschreibung; Kontext `galleries:image` (`<galerie>:<bild>`) schickt die Web-Variante nur mit `core.ai.assist.allowImages` |
@@ -41,7 +44,7 @@ Bildverarbeitung serverseitig über den Core-Dienst `core.images` (sharp). Navig
 | `pages/ImageBulkBar.svelte` | Sammelleiste im Auswahlmodus: Nur intern, Für Website freigeben, Löschen |
 | `contract.ts`, `refs.service.ts` | Dienst `GalleryRefsService` über `provides` (2026-10-25, für `website`): `searchPublicGalleryRefs`, `publicGalleryRefs` – nur öffentliche Galerien, ohne Rechteprüfung |
 | `subject-export.ts` | Datenauskunft (`subjectExport`, Art. 15/20): eigene Galerien, hochgeladene Bilder (nur Metadaten), Freigaben an das Konto, Veröffentlichungs-Bestätigungen |
-| `migrations/0001_init.sql` … `0004_image_private.sql` | Schema; Termine je Galerie; Bestätigung beim Veröffentlichen; Bilder „nur intern“ |
+| `migrations/0001_init.sql` … `0005_videos.sql` | Schema; Termine je Galerie; Bestätigung beim Veröffentlichen; Bilder „nur intern“; Videos |
 
 ## Datenmodell (0001)
 - IDs sind `text` (UUID per `crypto.randomUUID()`), Zeitstempel `timestamptz`, keine FKs auf Core-/Fremdschemata.
@@ -56,6 +59,9 @@ Bildverarbeitung serverseitig über den Core-Dienst `core.images` (sharp). Navig
   aus `events` (`event_id` ohne FK, anderes Schema), Index `event_id`. Migration 0002 hat vorhandene Bild-Zuordnungen auf die Galerie übernommen.
 - 0003: `galleries.public_confirmed_at`/`public_confirmed_by` (Benutzer-ID ohne FK) – letzte Bestätigung der Einwilligungen beim Veröffentlichen.
 - 0004: `gallery_images.is_private` boolean NOT NULL DEFAULT false – Bild „nur intern“ (siehe Website-Anbindung).
+- 0005: `gallery_images.media_type` text NOT NULL DEFAULT `'image'` CHECK `image|video`, `duration_seconds` real NULL. Bei Videos: `full_path` = Videodatei,
+  `thumb_path`/`web_path` = Vorschaubilder, `content_type`/`size_bytes` vom Video, `width`/`height` vom Vorschaubild. Videos zählen wie Bilder
+  (Anzahl, Grenze 2000, Titelbild = Vorschaubild, „nur intern“, Sammelaktionen).
 - `gallery_shares`: `<obj>_shares`-Muster (PK `gallery_id` + `principal_type` + `principal_id`, `principal_type` CHECK
   `everyone|group|role|user|member`, `level` CHECK `read|edit`, `created_by`, `created_at`), Index `(principal_type, principal_id)`.
 
@@ -95,16 +101,17 @@ Bearbeiten bei Änderungen → **403**.
 | (POST/PUT) Veröffentlichen | – | wird die Galerie öffentlich (Neuanlage `public` oder privat → öffentlich), ist `consentConfirmed: true` Pflicht, sonst **422** Pfad `consentConfirmed`; speichert `public_confirmed_at`/`_by`, Audit-Metadaten `consentConfirmed: true`. Bleibt sie öffentlich, keine neue Bestätigung; zurück auf privat → Bestätigung bleibt als Historie, erneutes Veröffentlichen verlangt eine neue. Detail: `publicConfirmation { at, by: { id, name } \| null } \| null` |
 | DELETE `/galleries/:id` | Objekt-`edit` | CASCADE; Dateien **nach** der Transaktion best-effort entfernen |
 | PUT `/galleries/:id/cover` | Objekt-`edit` | `{ imageId \| null }` (null = Standard); fremdes Bild → 422 |
-| POST `/galleries/:id/images` | Objekt-`edit` | multipart `file` (+ optional `description`), ≤ 25 MB, ≤ 2000 Bilder je Galerie; **ein Request je Datei** |
+| POST `/galleries/:id/images` | Objekt-`edit` | multipart `file` (+ optional `description`), Bild ≤ 25 MB, ≤ 2000 Einträge je Galerie; **ein Request je Datei**. Video (Typ oder Endung MP4/M4V/MOV/WebM): ≤ 100 MB bzw. `core.storage.maxFileSizeMb`, Pflichtfeld `poster` (JPEG/PNG/WebP, sonst 422 `poster`), optional `duration` (0–86400 s, 422 `duration`); Inhalt kein Video → 422 `file`; Speicher ohne Videotypen → 422 `file` mit Hinweis |
 | PUT `/galleries/:id/images/:imageId` | Objekt-`edit` | `{ description, isPrivate? }` (strikt; `isPrivate` fehlt → unverändert; `eventIds` am Bild → 422) |
 | POST `/galleries/:id/images/bulk` | Objekt-`edit` | `{ action: 'delete' \| 'make-private' \| 'make-public', ids ≤ 200 }` → `{ affected }`; fremde ID → 404, nichts geändert |
 | DELETE `/galleries/:id/images/:imageId` | Objekt-`edit` | Bild + Dateien |
-| GET `/galleries/:id/images/:imageId/:variant` | gallery.view + Objekt-`read` | `thumb\|web\|full`, rohe Response (gestreamt), `private, max-age=3600`, `nosniff`; `full` mit `content-disposition: attachment`; eigenes Rate-Limit `IMAGE_RATE_LIMIT` (1200/60 s, #23 – das Standardlimit 120/60 s gilt je Endpunktmuster, also für alle Bilder zusammen) |
+| GET `/limits` | gallery.view | `{ maxImageBytes, maxVideoBytes, videosAllowed }` aus `core.storage.maxFileSizeMb`/`allowedContentTypes` (UI: Hinweistext, `accept`, Vorprüfung) |
+| GET `/galleries/:id/images/:imageId/:variant` | gallery.view + Objekt-`read` | `thumb\|web\|full\|video` (`video` nur bei Videos, sonst 404; `full`/`video` eines Videos beantworten **Range** mit 206/416, `accept-ranges: bytes`), rohe Response (gestreamt), `private, max-age=3600`, `nosniff`; `full` mit `content-disposition: attachment`; eigenes Rate-Limit `IMAGE_RATE_LIMIT` (1200/60 s, #23 – das Standardlimit 120/60 s gilt je Endpunktmuster, also für alle Bilder zusammen) |
 | GET `/principals` | gallery.view | Query `search` (2–100 Zeichen) → `searchPrincipals`; nur mit `create`/`edit-all`/eigener Galerie/`edit`-Freigabe (sonst 403), 60/60 s; Mitglieder nur mit `members.member.view`, E-Mail nur mit `core.users.view` |
 | GET `/events` | gallery.view | Terminsuche (`search`, `limit` 1–50) über den `events`-Dienst, nur sichtbare Termine; ohne `events` bzw. ohne `events.event.view` → `[]` |
 | GET `/website/galleries` | **website.read** | nur `public`: `id`, `title`, `description`, `imageCount`, `cover`, `events` (nur `onWebsite`), `updatedAt`; `eventId` = nur Galerien zu diesem Website-Termin (sonst leer); `limit`/`offset`; Rate-Limit 120/60 s |
-| GET `/website/galleries/:id` | **website.read** | öffentliche Galerie (mit `events`, nur `onWebsite`) + Bilder (`id`, Beschreibung, Maße, `position`); privat → 404 |
-| GET `/website/galleries/:id/images/:imageId/:variant` | **website.read** | nur `thumb\|web` (`full` → 422), Bild einer privaten Galerie → 404, Rate-Limit `IMAGE_RATE_LIMIT` (1200/60 s), `public, max-age=86400` |
+| GET `/website/galleries/:id` | **website.read** | öffentliche Galerie (mit `events`, nur `onWebsite`) + Bilder (`id`, Beschreibung, Maße, `position`, `mediaType`, `durationSeconds`); privat → 404 |
+| GET `/website/galleries/:id/images/:imageId/:variant` | **website.read** | nur `thumb\|web\|video` (`full` → 422; `video` mit Range, Dateiname `<imageId>.<ext>`, bei Bildern 404), Bild einer privaten Galerie → 404, Rate-Limit `IMAGE_RATE_LIMIT` (1200/60 s), `public, max-age=86400` |
 
 Audit: `galleries.gallery.created|updated|deleted|cover_changed|published|unpublished`, `galleries.image.uploaded|updated|deleted|bulk_updated` –
 `target` = ID, metadata nur IDs/Zähler/`visibility`, **keine** Beschreibungen oder Dateinamen.
@@ -139,9 +146,27 @@ Audit: `galleries.gallery.created|updated|deleted|cover_changed|published|unpubl
   Originalauflösung metadatenfrei, JPEG q90 bzw. PNG bei Transparenz (`format: 'auto'`). Nie vergrößern.
 - Fehler: leer/unlesbar/nicht unterstützt/zu viele Pixel → 400 (`badRequest`), zu groß → 413 (`tooLarge`); Texte deutsch mit Umlauten.
 
+## Videos (1.5.0, 2026-11-18)
+- Formate **MP4/M4V, MOV, WebM** (`VIDEO_CONTENT_TYPES`, Endungen `VIDEO_EXTENSIONS`, `videoTypeOf`): Erkennung des Uploads nach Browser-Typ **oder** Endung,
+  Prüfung des Inhalts per `sniffVideoType` (ftyp-Marke ohne AVIF/HEIC, QuickTime ohne ftyp, EBML mit DocType `webm`). Kein ffmpeg im Core: **keine Neukodierung** –
+  abspielbar ist, was der Browser kann (H.264 überall; HEVC-MOV vom iPhone v. a. in Safari, sonst nur Download).
+- **Metadaten** (`stripVideoMetadata`, Länge bleibt gleich): MP4/MOV `udta`/`meta` (oberste Ebene, `moov`, `trak`, `mdia`, `minf`) und XMP-`uuid` → `free` mit Nullen
+  (GPS `©xyz` bzw. `com.apple.quicktime.location.ISO6709`, Gerät, Software); WebM `Tags` im `Segment` → `Void`. Chunk-Offsets bleiben gültig. Nicht entfernt:
+  Zeitstempel in `mvhd`, Metadaten-Spuren (`mebx`), Tags hinter Elementen unbekannter Größe (WebM aus MediaRecorder).
+- **Vorschaubild** erzeugt der Browser (`pages/video-poster.ts`), der Server macht daraus per `core.images` `thumb`/`web` (`POSTER_SPECS`); API-Clients schicken `poster` selbst.
+- **Größe**: `MAX_VIDEO_BYTES` 100 MB (ein Request, unter `BODY_SIZE_LIMIT` 110 MB), effektiv `min(100 MB, core.storage.maxFileSizeMb)` – Standard des Speichers 50 MB.
+  Das Video liegt beim Upload komplett im Arbeitsspeicher (wie Bilder).
+- **Speicher-Freigabe nötig**: Die Core-Standardliste (`DEFAULT_ALLOWED_CONTENT_TYPES`) enthält keine Videotypen. Ohne `video/mp4`, `video/quicktime`, `video/webm`
+  in `core.storage.allowedContentTypes` (ersetzt die Standardliste komplett – Standardtypen mit eintragen) → 422, die UI blendet Videos dann aus.
+  **Offen:** Videotypen in die Core-Standardliste aufnehmen (Core-Repo, danach Tag + Submodul).
+- **Range**: `rangeFileResponse` (`files.ts`, `parseRange`/`sliceStream`) schneidet den Bereich aus `core.storage.downloadStream` – Bytes vor dem Bereich werden aus S3
+  gelesen und verworfen (Spulen ans Ende liest die Datei einmal ganz). Antwort über `secureFileResponse` (Videotypen dort nicht inline → `attachment`, für `<video>` egal).
+- UI: Raster mit Play-Symbol und Laufzeit, Betrachter mit `<video controls>` (Poster = `web`; Wischen/Pfeiltasten auf dem Video gehören dem Player), Texte „Bild“/„Video“.
+  Zählungen heißen weiter „Bilder“.
+
 ## Storage
 - Dateien über `core.storage` mit `filesCtx()` = `core.auth.systemContext('galleries-files')`, **erst nach** der Objektprüfung
-  (Muster `actions/service.ts`). Pfad `<galleryId>/<imageId>-<variant>.<webp|jpg|png>` (`variantPath`).
+  (Muster `actions/service.ts`). Pfad `<galleryId>/<imageId>-<variant>.<webp|jpg|png>` (`variantPath`), Videos `<galleryId>/<imageId>-video.<mp4|mov|webm>` (`videoPath`).
 - Upload: verarbeiten → Storage → DB; bei DB-Fehler Dateien best-effort entfernen (`removeFiles`). Ohne S3 → **503**.
 - Core-Aufrufe (`storage`, `audit`, `users.directory`, `events`-Dienst) **nie** in offener Modul-Transaktion (PGlite).
 - Reset `all` löscht Dateien per `storagePrefixes: 'all'` (`core.storage.purge`).
@@ -159,6 +184,9 @@ Audit: `galleries.gallery.created|updated|deleted|cover_changed|published|unpubl
   Modul aus → 404), `galleries-images.test.ts` (Upload mit `tests/helpers/fake-storage.ts`, Titelbild-Fallback, Termin-Zuordnung der Galerie
   mit/ohne `events`, Sammelaktionen), `galleries-website.test.ts` (nur `public`, Felder, Varianten, Key nur mit Scope → 403 intern),
   `events-refs.test.ts` (Dienst `EventRefsService`); „nur intern“ (PUT, Sammelaktion, Website-Detail/Liste/Titelbild/Datei, Verweis-Dienst) in `galleries-website.test.ts`.
+- Videos: Unit `galleries-video.test.ts` (Erkennung, Metadaten MP4/MOV/WebM, `parseRange`/`sliceStream`, Schema-Hilfen), Integration `galleries-videos.test.ts`
+  (`/limits`, 422 ohne Videotypen, Upload MP4/MOV/WebM, Ablehnungen, 403, Range 200/206/416, Website, Löschen, Audit); synthetische Testdateien in `tests/video-fixtures.ts`.
+  Nicht geprüft: Vorschaubild und Abspielen im echten Browser/iOS, echter S3.
 - E2E: `tests/e2e/galleries.spec.ts` (ohne S3: aktivieren, anlegen per Dialog, Teilen „Stamm (alle)“, bearbeiten, Filter, löschen; Upload ohne S3 → „Dateispeicher nicht eingerichtet“). Upload-Erfolg über Integrationstests (Fake-Storage) und manuell mit MinIO (API).
 
 ## Entscheidungen und offen

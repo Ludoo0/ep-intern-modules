@@ -1,5 +1,5 @@
 /**
- * Hilfs-Endpoints für die Galerie-UI: Freigabe-Kandidaten, Terminsuche, Stammesname.
+ * Hilfs-Endpoints für die Galerie-UI: Freigabe-Kandidaten, Terminsuche, Stammesname, Upload-Grenzen.
  * Alle Core-/Modul-Dienste außerhalb von Transaktionen (PGlite).
  */
 import { sql } from 'drizzle-orm';
@@ -11,9 +11,15 @@ import {
 	searchPrincipals,
 	type AnyApiEndpoint
 } from '$lib/sdk/server';
-import { eventsService } from './files';
+import { eventsService, uploadLimits } from './files';
 import { everyoneLabel } from './galleries.service';
-import { MODULE_ID, eventSearchQuery, principalSearchQuery, type EventRef } from './schemas';
+import {
+	MODULE_ID,
+	eventSearchQuery,
+	principalSearchQuery,
+	type EventRef,
+	type UploadLimits
+} from './schemas';
 
 const TAGS = ['Modul: galleries'];
 export const metaEndpoints: AnyApiEndpoint[] = [
@@ -71,5 +77,16 @@ export const metaEndpoints: AnyApiEndpoint[] = [
 		tags: TAGS,
 		permission: 'galleries.gallery.view',
 		handler: async () => ({ name: await everyoneLabel() })
+	}),
+	defineEndpoint({
+		method: 'GET',
+		path: '/limits',
+		summary: 'Upload-Grenzen (Bild-/Videogröße, Videos im Dateispeicher erlaubt?)',
+		description:
+			'`maxVideoBytes` = 100 MB bzw. kleiner, wenn `core.storage.maxFileSizeMb` kleiner ist; ' +
+			'`videosAllowed` = `false`, wenn `core.storage.allowedContentTypes` die Videotypen nicht zulässt.',
+		tags: TAGS,
+		permission: 'galleries.gallery.view',
+		handler: async (): Promise<UploadLimits> => uploadLimits()
 	})
 ];

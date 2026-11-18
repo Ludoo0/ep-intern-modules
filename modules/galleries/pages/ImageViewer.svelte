@@ -16,7 +16,13 @@
 	import { Label } from '$lib/components/ui/label';
 	import { ConfirmDialog, AssistTextarea } from '$lib/components/layout';
 	import { ApiClientError, apiFetch } from '$lib/sdk/client';
-	import { imageUpdateInput, imageUrl, MAX_IMAGE_DESCRIPTION, type GalleryImage } from '../schemas';
+	import {
+		formatDuration,
+		imageUpdateInput,
+		imageUrl,
+		MAX_IMAGE_DESCRIPTION,
+		type GalleryImage
+	} from '../schemas';
 
 	let {
 		open = $bindable(false),
@@ -59,6 +65,9 @@
 	});
 
 	const isCover = $derived(!!current && current.id === coverImageId);
+	const isVideo = $derived(current?.mediaType === 'video');
+	/** „Bild“ bzw. „Video“ für Texte */
+	const noun = $derived(isVideo ? 'Video' : 'Bild');
 
 	let editing = $state(false);
 	let draftDescription = $state('');
@@ -106,7 +115,8 @@
 		if (!(target instanceof HTMLElement)) return false;
 		if (target.isContentEditable) return true;
 		const tag = target.tagName;
-		return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+		// Im Video steuern die Pfeiltasten das Spulen
+		return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'VIDEO';
 	}
 
 	function onwindowkeydown(e: KeyboardEvent) {
@@ -126,6 +136,11 @@
 	// Wischgesten (nur waagerecht, nicht beim Bearbeiten)
 	let touchStart: { x: number; y: number } | null = null;
 	function ontouchstart(e: TouchEvent) {
+		// Wischen auf dem Video gehört zu dessen Steuerung (Spulen), nicht zum Blättern
+		if (e.target instanceof HTMLVideoElement) {
+			touchStart = null;
+			return;
+		}
 		const t = e.touches[0];
 		touchStart = e.touches.length === 1 && t ? { x: t.clientX, y: t.clientY } : null;
 	}
@@ -203,7 +218,7 @@
 			};
 			editing = false;
 			editingId = null;
-			toast.success('Bild gespeichert');
+			toast.success(`${noun} gespeichert`);
 			onchanged();
 		} catch (err) {
 			if (err instanceof ApiClientError) {
@@ -231,8 +246,8 @@
 			saved = { img, description: shown.description, isPrivate };
 			toast.success(
 				isPrivate
-					? 'Bild ist nur intern – nicht auf der Website'
-					: 'Bild wieder mit der Galerie sichtbar'
+					? `${noun} ist nur intern – nicht auf der Website`
+					: `${noun} wieder mit der Galerie sichtbar`
 			);
 			onchanged();
 		} catch (err) {
@@ -262,7 +277,7 @@
 		busy = true;
 		try {
 			await apiFetch(`${base}/images/${img.id}`, { method: 'DELETE' });
-			toast.success('Bild gelöscht');
+			toast.success(`${noun} gelöscht`);
 			if (images.length <= 1) open = false;
 			else if (safeIndex >= images.length - 1) index = safeIndex - 1;
 			else index = safeIndex;
@@ -306,18 +321,33 @@
 				class="relative flex h-[62dvh] shrink-0 items-center justify-center bg-zinc-950 text-zinc-50 select-none lg:h-full lg:min-w-0 lg:flex-1"
 				role="group"
 				aria-roledescription="Bildbetrachter"
-				aria-label={`Bild ${safeIndex + 1} von ${images.length}`}
+				aria-label={`${noun} ${safeIndex + 1} von ${images.length}`}
 				{ontouchstart}
 				{ontouchend}
 			>
 				{#key current.id}
-					<img
-						src={imageUrl(galleryId, current.id, 'web')}
-						alt={shown.description ?? 'Bild'}
-						decoding="async"
-						class="max-h-full max-w-full object-contain"
-						draggable="false"
-					/>
+					{#if isVideo}
+						<!-- svelte-ignore a11y_media_has_caption -->
+						<video
+							src={imageUrl(galleryId, current.id, 'video')}
+							poster={imageUrl(galleryId, current.id, 'web')}
+							controls
+							playsinline
+							preload="metadata"
+							class="max-h-full max-w-full"
+							aria-label={shown.description ?? 'Video'}
+						>
+							Dein Browser kann dieses Video nicht abspielen – bitte herunterladen.
+						</video>
+					{:else}
+						<img
+							src={imageUrl(galleryId, current.id, 'web')}
+							alt={shown.description ?? 'Bild'}
+							decoding="async"
+							class="max-h-full max-w-full object-contain"
+							draggable="false"
+						/>
+					{/if}
 				{/key}
 
 				<div
@@ -345,7 +375,7 @@
 						variant="ghost"
 						size="icon-lg"
 						class="absolute top-1/2 left-2 -translate-y-1/2 rounded-full bg-black/40 text-zinc-50 hover:bg-black/60 hover:text-white dark:hover:bg-black/60 sm:size-11"
-						aria-label="Vorheriges Bild"
+						aria-label="Vorheriger Eintrag"
 						onclick={prev}
 					>
 						<ChevronLeftIcon class="size-6" />
@@ -356,7 +386,7 @@
 						variant="ghost"
 						size="icon-lg"
 						class="absolute top-1/2 right-2 -translate-y-1/2 rounded-full bg-black/40 text-zinc-50 hover:bg-black/60 hover:text-white dark:hover:bg-black/60 sm:size-11"
-						aria-label="Nächstes Bild"
+						aria-label="Nächster Eintrag"
 						onclick={next}
 					>
 						<ChevronRightIcon class="size-6" />
@@ -370,7 +400,8 @@
 			>
 				<div class="space-y-1">
 					<Dialog.Title class="flex items-center gap-2 text-base font-semibold">
-						Bild {safeIndex + 1}
+						{noun}
+						{safeIndex + 1}
 						{#if isCover}
 							<Badge variant="secondary" class="gap-1">
 								<StarIcon class="size-3 fill-warning text-warning" aria-hidden="true" />
@@ -385,8 +416,11 @@
 						{/if}
 					</Dialog.Title>
 					<Dialog.Description class="text-muted-foreground text-xs">
-						Hochgeladen am {formatUploaded(current.createdAt)} · {current.width} × {current.height} px
-						·
+						Hochgeladen am {formatUploaded(current.createdAt)} ·
+						{#if isVideo && current.durationSeconds != null}
+							{formatDuration(current.durationSeconds)} ·
+						{/if}
+						{current.width} × {current.height} px ·
 						{formatBytes(current.sizeBytes)}
 					</Dialog.Description>
 				</div>
@@ -505,8 +539,8 @@
 				</div>
 				{#if shown.isPrivate && !editing}
 					<p class="text-muted-foreground -mt-2 text-xs">
-						Nur intern: Das Bild erscheint nie auf der Stammeswebsite, auch wenn die Galerie
-						öffentlich ist.
+						Nur intern: {isVideo ? 'Das Video' : 'Das Bild'} erscheint nie auf der Stammeswebsite, auch
+						wenn die Galerie öffentlich ist.
 					</p>
 				{/if}
 				{#if canEdit && isCover && coverIsDefault && !editing}
@@ -516,15 +550,17 @@
 				{/if}
 			</aside>
 		{:else}
-			<Dialog.Title class="sr-only">Bild</Dialog.Title>
+			<Dialog.Title class="sr-only">{noun}</Dialog.Title>
 		{/if}
 	</Dialog.Content>
 </Dialog.Root>
 
 <ConfirmDialog
 	bind:open={confirmDelete}
-	title="Bild löschen?"
-	description="Das Bild wird mit allen Varianten endgültig gelöscht. Das lässt sich nicht rückgängig machen."
+	title="{noun} löschen?"
+	description="{isVideo
+		? 'Das Video wird mit Vorschaubildern'
+		: 'Das Bild wird mit allen Varianten'} endgültig gelöscht. Das lässt sich nicht rückgängig machen."
 	confirmLabel="Löschen"
 	destructive
 	onconfirm={remove}

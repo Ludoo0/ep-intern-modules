@@ -39,7 +39,9 @@ export const websiteGalleryDetailSchema = websiteGallerySchema
 					description: z.string().nullable(),
 					width: z.number(),
 					height: z.number(),
-					position: z.number().int()
+					position: z.number().int(),
+					mediaType: z.enum(['image', 'video']),
+					durationSeconds: z.number().nullable()
 				})
 				.strict()
 		)

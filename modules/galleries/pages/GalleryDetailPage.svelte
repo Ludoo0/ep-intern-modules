@@ -378,7 +378,7 @@
 				<EmptyState
 					title="Noch keine Bilder"
 					description={canEdit
-						? 'Ziehe Bilder in das Feld oben oder wähle sie über „Bilder auswählen“ aus.'
+						? 'Ziehe Bilder oder Videos in das Feld oben oder wähle sie über „Dateien auswählen“ aus.'
 						: 'In dieser Galerie gibt es noch keine Bilder.'}
 				/>
 			{:else}

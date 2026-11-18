@@ -1,8 +1,9 @@
 <script lang="ts">
 	import StarIcon from '@lucide/svelte/icons/star';
 	import LockIcon from '@lucide/svelte/icons/lock';
+	import PlayIcon from '@lucide/svelte/icons/play';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { imageUrl, type GalleryImage } from '../schemas';
+	import { formatDuration, imageUrl, type GalleryImage } from '../schemas';
 
 	let {
 		galleryId,
@@ -34,8 +35,11 @@
 	}
 
 	function label(img: GalleryImage, index: number): string {
-		const base = img.description ?? `Bild ${index + 1}`;
+		const isVideo = img.mediaType === 'video';
+		const base = img.description ?? `${isVideo ? 'Video' : 'Bild'} ${index + 1}`;
 		const parts = [base];
+		if (isVideo && img.description) parts.push('Video');
+		if (isVideo && img.durationSeconds != null) parts.push(formatDuration(img.durationSeconds));
 		if (img.id === coverImageId) parts.push('Titelbild');
 		if (img.isPrivate) parts.push('nur intern');
 		return parts.join(', ');
@@ -45,7 +49,7 @@
 {#if images.length > 0}
 	<ul
 		class="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"
-		aria-label="Bilder"
+		aria-label="Bilder und Videos"
 	>
 		{#each images as img, i (img.id)}
 			{@const isSelected = selectedSet.has(img.id)}
@@ -67,7 +71,7 @@
 						src={imageUrl(galleryId, img.id, 'thumb')}
 						loading="lazy"
 						decoding="async"
-						alt={img.description ?? 'Bild'}
+						alt={img.description ?? (img.mediaType === 'video' ? 'Video' : 'Bild')}
 						width={img.width}
 						height={img.height}
 						class={[
@@ -78,6 +82,26 @@
 						draggable="false"
 					/>
 
+					{#if img.mediaType === 'video'}
+						<span
+							class="pointer-events-none absolute inset-0 flex items-center justify-center"
+							aria-hidden="true"
+						>
+							<span
+								class="flex size-10 items-center justify-center rounded-full bg-black/55 text-white"
+							>
+								<PlayIcon class="ml-0.5 size-5 fill-current" />
+							</span>
+						</span>
+						{#if img.durationSeconds != null}
+							<span
+								class="absolute right-1.5 bottom-1.5 rounded-md bg-black/65 px-1.5 py-0.5 text-xs font-medium text-white tabular-nums"
+								aria-hidden="true"
+							>
+								{formatDuration(img.durationSeconds)}
+							</span>
+						{/if}
+					{/if}
 					{#if isCover}
 						<span
 							class="bg-background/90 text-foreground absolute top-1.5 right-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium shadow-sm"

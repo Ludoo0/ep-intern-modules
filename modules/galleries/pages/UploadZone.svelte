@@ -13,9 +13,14 @@
 		IMAGE_ACCEPT,
 		IMAGE_CONTENT_TYPES,
 		MAX_IMAGE_BYTES,
+		MAX_VIDEO_BYTES,
+		MEDIA_ACCEPT,
 		UPLOAD_CONCURRENCY,
-		type GalleryImage
+		videoTypeOf,
+		type GalleryImage,
+		type UploadLimits
 	} from '../schemas';
+	import { videoPoster } from './video-poster';
 
 	let {
 		galleryId,
@@ -49,6 +54,19 @@
 	let dragging = $state(false);
 	let input = $state<HTMLInputElement | null>(null);
 	let batch = { ok: 0, failed: 0, rejected: 0, sinceRefresh: 0 };
+	/** Grenzen vom Server (Speicher-Einstellungen); bis zur Antwort die festen Obergrenzen */
+	let limits = $state<UploadLimits>({
+		maxImageBytes: MAX_IMAGE_BYTES,
+		maxVideoBytes: MAX_VIDEO_BYTES,
+		videosAllowed: true
+	});
+
+	$effect(() => {
+		apiFetch<UploadLimits>('/modules/galleries/limits').then(
+			(l) => (limits = l),
+			() => undefined
+		);
+	});
 
 	const finished = $derived(items.filter((i) => i.status === 'done' || i.status === 'error'));
 	const failed = $derived(items.filter((i) => i.status === 'error'));
@@ -65,12 +83,23 @@
 
 	/** Vorprüfung im Browser (der Server prüft den Inhalt zusätzlich) */
 	function precheck(file: File): string | null {
-		if (!(IMAGE_CONTENT_TYPES as readonly string[]).includes(file.type)) {
-			return 'Dateityp nicht unterstützt (JPEG, PNG, WebP, AVIF oder GIF)';
-		}
 		if (file.size === 0) return 'Datei ist leer';
-		if (file.size > MAX_IMAGE_BYTES) {
-			return `Datei ist zu groß (höchstens ${formatSize(MAX_IMAGE_BYTES)})`;
+		if (videoTypeOf(file)) {
+			if (!limits.videosAllowed) {
+				return 'Videos sind im Dateispeicher nicht freigegeben (Einstellungen → Speicher)';
+			}
+			if (file.size > limits.maxVideoBytes) {
+				return `Video ist zu groß (höchstens ${formatSize(limits.maxVideoBytes)})`;
+			}
+			return null;
+		}
+		if (!(IMAGE_CONTENT_TYPES as readonly string[]).includes(file.type)) {
+			return limits.videosAllowed
+				? 'Dateityp nicht unterstützt (Bilder: JPEG, PNG, WebP, AVIF, GIF; Videos: MP4, MOV, WebM)'
+				: 'Dateityp nicht unterstützt (JPEG, PNG, WebP, AVIF oder GIF)';
+		}
+		if (file.size > limits.maxImageBytes) {
+			return `Datei ist zu groß (höchstens ${formatSize(limits.maxImageBytes)})`;
 		}
 		return null;
 	}
@@ -122,6 +151,11 @@
 		const body = new FormData();
 		body.append('file', item.file, item.name);
 		try {
+			if (videoTypeOf(item.file)) {
+				const poster = await videoPoster(item.file);
+				body.append('poster', poster.blob, 'poster.jpg');
+				if (poster.duration != null) body.append('duration', String(poster.duration));
+			}
 			await apiFetch<GalleryImage>(`/modules/galleries/galleries/${galleryId}/images`, {
 				method: 'POST',
 				body
@@ -160,11 +194,11 @@
 			rejected > 0 && (rejected === 1 ? '1 Datei abgelehnt' : `${rejected} Dateien abgelehnt`)
 		].filter(Boolean);
 		if (ok > 0 && bad === 0) {
-			toast.success(ok === 1 ? '1 Bild hochgeladen' : `${ok} Bilder hochgeladen`);
+			toast.success(ok === 1 ? '1 Datei hochgeladen' : `${ok} Dateien hochgeladen`);
 		} else if (ok > 0) {
 			toast.warning(`${ok} hochgeladen, ${parts.join(', ')}`);
 		} else if (failed === 1 && rejected === 0) {
-			toast.error('Bild konnte nicht hochgeladen werden');
+			toast.error('Datei konnte nicht hochgeladen werden');
 		} else if (bad > 0) {
 			toast.error(parts.join(', '));
 		}
@@ -215,7 +249,7 @@
 <div class="space-y-3">
 	<div
 		role="group"
-		aria-label="Bilder hochladen"
+		aria-label="Bilder und Videos hochladen"
 		aria-disabled={disabled}
 		class={[
 			'flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-4 py-6 text-center transition-colors',
@@ -229,20 +263,23 @@
 	>
 		<ImageUp class="size-8 text-muted-foreground" aria-hidden="true" />
 		<p class="text-sm">
-			<span class="hidden sm:inline">Bilder hierher ziehen oder</span>
-			<span class="sm:hidden">Bilder vom Gerät hinzufügen</span>
+			<span class="hidden sm:inline">Bilder oder Videos hierher ziehen oder</span>
+			<span class="sm:hidden">Bilder oder Videos vom Gerät hinzufügen</span>
 		</p>
 		<Button type="button" variant="outline" {disabled} onclick={() => input?.click()}>
-			<ImageUp /> Bilder auswählen
+			<ImageUp /> Dateien auswählen
 		</Button>
 		<p class="text-xs text-muted-foreground">
-			JPEG, PNG, WebP, AVIF oder GIF, je Datei höchstens {formatSize(MAX_IMAGE_BYTES)}
+			Bilder: JPEG, PNG, WebP, AVIF oder GIF bis {formatSize(limits.maxImageBytes)}
+			{#if limits.videosAllowed}
+				<br />Videos: MP4, MOV oder WebM bis {formatSize(limits.maxVideoBytes)}
+			{/if}
 		</p>
 		<input
 			bind:this={input}
 			type="file"
 			multiple
-			accept={IMAGE_ACCEPT}
+			accept={limits.videosAllowed ? MEDIA_ACCEPT : IMAGE_ACCEPT}
 			class="sr-only"
 			tabindex="-1"
 			aria-hidden="true"
@@ -260,7 +297,7 @@
 					{:else if failed.length}
 						{items.length - failed.length} von {items.length} hochgeladen, {failed.length} mit Fehler
 					{:else}
-						{items.length === 1 ? '1 Bild hochgeladen' : `${items.length} Bilder hochgeladen`}
+						{items.length === 1 ? '1 Datei hochgeladen' : `${items.length} Dateien hochgeladen`}
 					{/if}
 				</p>
 				<div class="flex flex-wrap gap-2">

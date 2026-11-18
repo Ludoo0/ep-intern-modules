@@ -18,7 +18,15 @@ import {
 	type Tx
 } from '$lib/sdk/server';
 import type { EventRefInfo } from '$modules/events/contract';
-import { VARIANT_COLUMN, db, eventsService, fileResponse, websiteCoverSql } from './files';
+import {
+	VARIANT_COLUMN,
+	db,
+	eventsService,
+	fileResponse,
+	rangeFileResponse,
+	websiteCoverSql
+} from './files';
+import { durationOf, mediaTypeOf } from './images.service';
 import {
 	idParams,
 	websiteListQuery,
@@ -114,7 +122,9 @@ function imageOf(r: Row): WebsiteImage {
 		description: textOrNull(r.description),
 		width: Number(r.width),
 		height: Number(r.height),
-		position: Number(r.position ?? 0)
+		position: Number(r.position ?? 0),
+		mediaType: mediaTypeOf(r),
+		durationSeconds: durationOf(r)
 	};
 }
 
@@ -185,32 +195,44 @@ export const websiteEndpoints: AnyApiEndpoint[] = [
 	defineEndpoint({
 		method: 'GET',
 		path: '/website/galleries/:id/images/:imageId/:variant',
-		summary: 'Bilddatei einer öffentlichen Galerie (thumb oder web) für die Stammeswebsite',
+		summary:
+			'Bild- oder Videodatei einer öffentlichen Galerie (thumb, web oder video) für die Stammeswebsite',
 		description:
 			'Liefert die Bilddatei (WebP, ohne Metadaten) in der Variante `thumb` (480 px lange Kante) ' +
 			'oder `web` (2048 px). Die Originalauflösung (`full`) ist nur intern abrufbar. Das Bild ' +
 			'muss zu einer öffentlichen Galerie gehören und darf nicht „nur intern“ sein, sonst 404. Antwort mit ' +
 			'`Cache-Control: public, max-age=86400` – bitte auf dem Website-Server zwischenspeichern ' +
 			'(der API-Key darf nicht im Browser landen, Bilder also über den eigenen Server ausliefern). ' +
-			'Eigenes Rate-Limit für Bilder (1200/60 s), da eine Seite viele Bilder lädt.',
+			'Eigenes Rate-Limit für Bilder (1200/60 s), da eine Seite viele Bilder lädt. Bei Videos ' +
+			'(`mediaType: video`) sind `thumb`/`web` Vorschaubilder und `video` die Videodatei ' +
+			'(MP4/MOV/WebM ohne Metadaten, `Range`-Anfragen → 206); `video` bei einem Bild → 404.',
 		tags: TAGS,
 		permission: 'galleries.website.read',
 		params: websiteVariantParams,
 		rateLimit: IMAGE_RATE_LIMIT,
-		handler: async ({ params }) => {
+		handler: async ({ params, request }) => {
 			const column = sql.raw(`i.${VARIANT_COLUMN[params.variant]}`);
-			const path = await db().transaction(async (tx) => {
+			const found = await db().transaction(async (tx) => {
 				const [row] = await rowsOf(
 					tx,
-					sql`SELECT ${column} AS path
+					sql`SELECT ${column} AS path, i.media_type, i.content_type
 						FROM gallery_images i
 						JOIN galleries g ON g.id = i.gallery_id
 						WHERE i.id = ${params.imageId} AND i.gallery_id = ${params.id}
 							AND g.visibility = 'public' AND NOT i.is_private`
 				);
-				return row?.path ? String(row.path) : null;
+				return row?.path ? row : null;
 			});
-			if (!path) throw errors.notFound('Bild nicht gefunden');
+			if (!found) throw errors.notFound('Bild nicht gefunden');
+			const path = String(found.path);
+			if (params.variant === 'video') {
+				if (mediaTypeOf(found) !== 'video') throw errors.notFound('Kein Video');
+				return rangeFileResponse(request, path, {
+					cache: 'public, max-age=86400',
+					contentType: String(found.content_type),
+					name: `${params.imageId}.${path.split('.').pop() ?? 'mp4'}`
+				});
+			}
 			return fileResponse(path, { cache: 'public, max-age=86400' });
 		}
 	}),
@@ -222,7 +244,8 @@ export const websiteEndpoints: AnyApiEndpoint[] = [
 			'Liefert eine öffentliche Galerie (inkl. Termine mit „auf der Website“) mit allen Bildern ' +
 			'(ID, Beschreibung, Masse, Position), sortiert nach Upload-Zeitpunkt; Bilder mit „nur intern“ ' +
 			'fehlen. Private oder unbekannte ' +
-			'Galerien → 404. Bilddateien über `/website/galleries/:id/images/:imageId/thumb|web`. ' +
+			'Galerien → 404. Bilddateien über `/website/galleries/:id/images/:imageId/thumb|web`, ' +
+			'Videos (`mediaType: video`, `durationSeconds`) zusätzlich über `…/video`. ' +
 			KEY_HINT,
 		tags: TAGS,
 		permission: 'galleries.website.read',
@@ -238,7 +261,8 @@ export const websiteEndpoints: AnyApiEndpoint[] = [
 				if (!gallery) return null;
 				const images = await rowsOf(
 					tx,
-					sql`SELECT id, gallery_id, description, width, height, position
+					sql`SELECT id, gallery_id, description, width, height, position, media_type,
+							duration_seconds
 						FROM gallery_images
 						WHERE gallery_id = ${params.id} AND NOT is_private
 						ORDER BY created_at ASC, id ASC`

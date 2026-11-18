@@ -4,12 +4,24 @@
  */
 import { sql } from 'drizzle-orm';
 import { errors, type Row, rowsOf, toIso, type Tx } from '$lib/sdk/server';
-import type { GalleryImage, ImageVariant } from './schemas';
+import type { GalleryImage, ImageVariant, MediaType } from './schemas';
 
 /** Spalten für `toGalleryImage` (Alias `i` für `gallery_images`) */
 export const IMAGE_COLUMNS = sql`i.id, i.gallery_id, i.description, i.position, i.original_name,
 	i.content_type, i.width, i.height, i.size_bytes, i.thumb_path, i.web_path, i.full_path,
-	i.uploaded_by, i.created_at, i.is_private`;
+	i.uploaded_by, i.created_at, i.is_private, i.media_type, i.duration_seconds`;
+
+/** `media_type` einer Zeile (fehlt = Bild) */
+export function mediaTypeOf(row: Row): MediaType {
+	return row.media_type === 'video' ? 'video' : 'image';
+}
+
+/** `duration_seconds` einer Zeile oder `null` */
+export function durationOf(row: Row): number | null {
+	if (row.duration_seconds == null) return null;
+	const n = Number(row.duration_seconds);
+	return Number.isFinite(n) ? Math.round(n * 10) / 10 : null;
+}
 
 /** Zeile aus `gallery_images` → DTO */
 export function toGalleryImage(row: Row): GalleryImage {
@@ -22,6 +34,8 @@ export function toGalleryImage(row: Row): GalleryImage {
 		contentType: String(row.content_type),
 		originalName: String(row.original_name),
 		position: Number(row.position),
+		mediaType: mediaTypeOf(row),
+		durationSeconds: durationOf(row),
 		isPrivate: row.is_private === true || row.is_private === 't',
 		uploadedBy: row.uploaded_by == null ? null : String(row.uploaded_by),
 		createdAt: toIso(row.created_at)
@@ -31,6 +45,8 @@ export function toGalleryImage(row: Row): GalleryImage {
 export interface ImagePaths {
 	id: string;
 	originalName: string;
+	mediaType: MediaType;
+	contentType: string;
 	paths: Record<ImageVariant, string>;
 }
 
@@ -39,6 +55,8 @@ export function imagePathsOf(row: Row): ImagePaths {
 	return {
 		id: String(row.id),
 		originalName: String(row.original_name),
+		mediaType: mediaTypeOf(row),
+		contentType: String(row.content_type ?? ''),
 		paths: {
 			thumb: String(row.thumb_path),
 			web: String(row.web_path),
@@ -67,7 +85,7 @@ export async function requireImagesOfGallery(
 	if (ids.length === 0) return [];
 	const rows = await rowsOf(
 		tx,
-		sql`SELECT i.id, i.original_name, i.thumb_path, i.web_path, i.full_path
+		sql`SELECT i.id, i.original_name, i.media_type, i.content_type, i.thumb_path, i.web_path, i.full_path
 			FROM gallery_images i
 			WHERE i.gallery_id = ${galleryId} AND i.id IN (${sql.join(
 				ids.map((id) => sql`${id}`),
@@ -79,7 +97,7 @@ export async function requireImagesOfGallery(
 }
 
 /** Dateiname für die Anzeige/Speicherung: ohne Pfad und Steuerzeichen, höchstens 200 Zeichen */
-export function sanitizeOriginalName(name: string | null | undefined): string {
+export function sanitizeOriginalName(name: string | null | undefined, fallback = 'bild'): string {
 	const base = (name ?? '').split(/[\\/]/).pop() ?? '';
 	const cleaned = base
 		// eslint-disable-next-line no-control-regex
@@ -88,7 +106,7 @@ export function sanitizeOriginalName(name: string | null | undefined): string {
 		.trim()
 		.slice(0, 200)
 		.trim();
-	return cleaned || 'bild';
+	return cleaned || fallback;
 }
 
 /** Download-Name der `full`-Variante: Originalname mit der Endung der gespeicherten Datei */
