@@ -4,6 +4,7 @@
 </script>
 
 <script lang="ts">
+	import { page } from '$app/state';
 	import { todayBerlin } from '$lib/sdk/dates';
 	import { tick, untrack } from 'svelte';
 	import { toast } from 'svelte-sonner';
@@ -30,9 +31,18 @@
 		entryInput,
 		type AccountingCategory,
 		type AccountingEntry,
-		type AccountingPayee
+		type AccountingPayee,
+		type BankSuggestion
 	} from '../schemas';
 	import PayeeDialog from './PayeeDialog.svelte';
+	import SuggestInput from './SuggestInput.svelte';
+	import {
+		bankDetail,
+		bankTitle,
+		canSuggestBank,
+		loadBankAccount,
+		loadBankSuggestions
+	} from './bank-suggest';
 
 	let {
 		open = $bindable(false),
@@ -157,6 +167,24 @@
 	const locked = $derived(entry?.clubPaidVia === 'treasury' || !!entry?.reimbursedAt);
 	const isReimbursedEntry = $derived(!!entry?.reimbursedAt);
 	const savedIban = $derived(entry?.recipient?.ibanMasked ?? null);
+	const bankActive = $derived(canSuggestBank((page.data.permissions ?? []) as string[]));
+	let loadingBank = $state(false);
+
+	async function pickBank(s: BankSuggestion) {
+		recipientName = bankTitle(s).slice(0, 100);
+		loadingBank = true;
+		try {
+			const acc = await loadBankAccount(s.ref);
+			recipientName = acc.holder.slice(0, 100);
+			iban = acc.iban;
+			bic = acc.bic ?? '';
+			fieldErrors = {};
+		} catch {
+			toast.error('Kontodaten aus der Kasse konnten nicht geladen werden');
+		} finally {
+			loadingBank = false;
+		}
+	}
 
 	function onTypeChange() {
 		if (category && !categoryOptions.some((o) => o.value === category)) category = null;
@@ -486,14 +514,20 @@
 								id="acc-recipient"
 								error={fieldErrors.recipientName}
 							>
-								<Input
+								<SuggestInput
 									id="acc-recipient"
 									bind:value={recipientName}
 									maxlength={100}
-									disabled={locked}
+									disabled={locked || loadingBank}
+									active={bankActive && !locked}
 									placeholder="z. B. Jugendherberge Bremen"
-									aria-invalid={!!fieldErrors.recipientName}
-									aria-describedby={fieldErrors.recipientName ? 'acc-recipient-error' : undefined}
+									invalid={!!fieldErrors.recipientName}
+									describedby={fieldErrors.recipientName ? 'acc-recipient-error' : undefined}
+									load={loadBankSuggestions}
+									keyOf={(s) => s.ref}
+									title={bankTitle}
+									detail={bankDetail}
+									onpick={pickBank}
 								/>
 							</FormField>
 							<div class="grid gap-4 sm:grid-cols-[1fr_10rem]">

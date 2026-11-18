@@ -331,10 +331,20 @@
 							</Card.Content>
 						</Card.Root>
 					{:else if !form.viewer}
-						<p class="text-muted-foreground text-xs">
-							Mitglied? <a href={loginHref} class="underline underline-offset-2">Melde dich an</a>,
-							dann werden deine Daten übernommen.
-						</p>
+						<Card.Root>
+							<Card.Content
+								class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+							>
+								<div class="flex flex-col gap-1">
+									<p class="text-sm font-medium">Mitglied mit Konto?</p>
+									<p class="text-muted-foreground text-xs">
+										Melde dich an, dann werden deine Daten aus dem Mitgliedsprofil übernommen. Ohne
+										Konto kannst du dich einfach unten anmelden.
+									</p>
+								</div>
+								<Button href={loginHref} variant="outline" class="shrink-0">Einloggen</Button>
+							</Card.Content>
+						</Card.Root>
 					{/if}
 					<Card.Root>
 						<Card.Content class="flex flex-col gap-5">

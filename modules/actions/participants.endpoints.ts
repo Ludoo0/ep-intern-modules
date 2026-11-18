@@ -9,6 +9,7 @@ import {
 	toIso,
 	type Tx
 } from '$lib/sdk/server';
+import type { MembersService } from '$modules/members/contract';
 import type { ParticipantPayment, TreasuryService } from '$modules/treasury/contract';
 import { requireAccess } from './access';
 import { canSeeHealth, encryptHealthText, readHealthFor } from './health';
@@ -146,13 +147,30 @@ export const participantEndpoints: ApiEndpoint[] = [
 		handler: async ({ ctx, params, body }) => {
 			const id = (params as { id: string }).id;
 			const input = body as ParticipantInput;
+			const memberId = input.memberId ?? null;
+			if (memberId) {
+				// Übernahme aus der Mitgliederdatenbank: Recht + Existenz VOR der Transaktion (Dienst `members`)
+				if (!core.permissions.has(ctx, 'members.member.view')) {
+					throw errors.forbidden('Keine Berechtigung, Mitglieder zu sehen');
+				}
+				const svc = await core.modules.use<MembersService>('members', MODULE_ID);
+				const [found] = await svc.searchMembers({ ids: [memberId], limit: 1 });
+				if (!found) throw errors.notFound('Mitglied nicht gefunden');
+			}
 			const participant = await moduleDb(MODULE_ID).transaction(async (tx) => {
 				await requireAccess(tx, ctx, id, 'edit');
+				if (memberId) {
+					const [dup] = await rowsOf(
+						tx,
+						sql`SELECT 1 FROM action_participants WHERE action_id = ${id} AND member_id = ${memberId}`
+					);
+					if (dup) throw errors.conflict('Dieses Mitglied ist bereits angemeldet');
+				}
 				const pid = crypto.randomUUID();
 				await tx.execute(
-					sql`INSERT INTO action_participants (id, action_id, name, group_label, birth_date,
+					sql`INSERT INTO action_participants (id, action_id, member_id, name, group_label, birth_date,
 							bremen_resident, role, juleica, diet, allergies, notes, source)
-						VALUES (${pid}, ${id}, ${input.name}, ${input.groupLabel}, ${input.birthDate},
+						VALUES (${pid}, ${id}, ${memberId}, ${input.name}, ${input.groupLabel}, ${input.birthDate},
 							${input.bremenResident}, ${input.role}, ${input.juleica}, ${encryptHealthText(input.diet)},
 							${encryptHealthText(input.allergies)}, ${encryptHealthText(input.notes)}, 'manual')`
 				);
@@ -167,7 +185,7 @@ export const participantEndpoints: ApiEndpoint[] = [
 			await core.audit.logFromContext(ctx, 'actions.participant.created', {
 				target: participant.id,
 				// Keine Namen im Audit (Issue #26): die ID in `target` genügt
-				metadata: { actionId: id, role: participant.role }
+				metadata: { actionId: id, role: participant.role, fromMember: memberId !== null }
 			});
 			return participant;
 		}

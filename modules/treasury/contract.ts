@@ -59,6 +59,14 @@ export interface TreasuryService {
 	/** Bankdaten aus den Kassen-Einstellungen (leere Felder = nicht gepflegt) */
 	bankData(): Promise<{ holder: string; iban: string; bic: string; name: string }>;
 	/**
+	 * Vorschläge für Bankverbindungen (Zahler mit IBAN, Empfänger manueller Auszahlungen/Lieferanten),
+	 * ab 2 Zeichen, nur maskiert. OHNE Rechteprüfung – der Aufrufer prüft (`treasury.bank.view`).
+	 * AUSSERHALB von Modul-Transaktionen aufrufen.
+	 */
+	searchBankAccounts(query: { search: string; limit?: number }): Promise<BankAccountSuggestion[]>;
+	/** Klartext einer Bankverbindung aus `searchBankAccounts` (`null` = unbekannt/ohne IBAN); Aufrufer prüft + auditiert */
+	bankAccount(ref: string): Promise<BankAccountDetails | null>;
+	/**
 	 * Meldet dem Amt „Kasse“ (Modul `offices`, optional) eine abgeschlossene Abrechnung bzw. eine neue
 	 * Zwischenabrechnung. Nach der Transaktion aufrufen; wirft nie (Fehler werden geloggt).
 	 */
@@ -86,6 +94,27 @@ export interface TreasuryService {
 	invoiceStatus(invoiceIds: string[]): Promise<Record<string, ExternalInvoiceStatus>>;
 	/** Zahlstand je Auszahlung über `ref` (fehlende fehlen im Ergebnis) */
 	payableStatus(refs: string[]): Promise<Record<string, ExternalPayableStatus>>;
+}
+
+/** Bankverbindung aus der Kasse als Vorschlag (ohne Klartext-IBAN) */
+export interface BankAccountSuggestion {
+	/** `payer:<id>` bzw. `payable:<id>` – für `bankAccount(ref)` */
+	ref: string;
+	kind: 'payer' | 'payable';
+	/** Name des Zahlers bzw. Empfänger*in der Auszahlung */
+	name: string;
+	/** Abweichender Kontoinhaber (nur Zahler) */
+	holder: string | null;
+	ibanMasked: string;
+	bic: string | null;
+}
+
+export interface BankAccountDetails {
+	/** Kontoinhaber (Zahler: Kontoinhaber, sonst Name) */
+	holder: string;
+	/** Formatiert in Vierergruppen */
+	iban: string;
+	bic: string | null;
 }
 
 export interface OrderInvoiceLine {

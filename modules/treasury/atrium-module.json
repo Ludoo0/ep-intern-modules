@@ -3,7 +3,7 @@
 	"id": "treasury",
 	"name": "Kasse",
 	"description": "Konten und Buchungen, offene Beiträge aus Aktionen, Rechnungen, Zahlungserinnerungen und Kassenberichte.",
-	"version": "1.2.0",
+	"version": "1.3.0",
 	"core": ">=2.0.0-0 <3.0.0",
 	"dependencies": {
 		"members": {

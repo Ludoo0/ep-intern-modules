@@ -1,12 +1,26 @@
 <script lang="ts">
 	import { tick } from 'svelte';
+	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
 	import { ApiClientError, apiFetch } from '$lib/sdk/client';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
 	import { FormField, BUSY_SAVE, BUSY_LOAD } from '$lib/components/layout';
-	import { payeeInput, payeeUpdateInput, type AccountingPayee } from '../schemas';
+	import {
+		payeeInput,
+		payeeUpdateInput,
+		type AccountingPayee,
+		type BankSuggestion
+	} from '../schemas';
+	import SuggestInput from './SuggestInput.svelte';
+	import {
+		bankDetail,
+		bankTitle,
+		canSuggestBank,
+		loadBankAccount,
+		loadBankSuggestions
+	} from './bank-suggest';
 
 	let {
 		open = $bindable(false),
@@ -28,6 +42,24 @@
 	let loadingIban = $state(false);
 	let error = $state('');
 	let fieldErrors = $state<Record<string, string>>({});
+
+	const bankActive = $derived(!payee && canSuggestBank((page.data.permissions ?? []) as string[]));
+
+	async function pickBank(s: BankSuggestion) {
+		name = bankTitle(s).slice(0, 100);
+		loadingIban = true;
+		try {
+			const acc = await loadBankAccount(s.ref);
+			name = acc.holder.slice(0, 100);
+			iban = acc.iban;
+			bic = acc.bic ?? '';
+			fieldErrors = {};
+		} catch {
+			error = 'Kontodaten aus der Kasse konnten nicht geladen werden.';
+		} finally {
+			loadingIban = false;
+		}
+	}
 
 	const base = $derived(`/modules/actions/actions/${actionId}/accounting/payees`);
 
@@ -144,13 +176,19 @@
 
 		<form class="space-y-4" onsubmit={submit} novalidate>
 			<FormField label="Name *" id="payee-name" error={fieldErrors.name}>
-				<Input
+				<SuggestInput
 					id="payee-name"
 					bind:value={name}
 					required
 					maxlength={100}
-					aria-invalid={!!fieldErrors.name}
-					aria-describedby={fieldErrors.name ? 'payee-name-error' : undefined}
+					active={bankActive}
+					invalid={!!fieldErrors.name}
+					describedby={fieldErrors.name ? 'payee-name-error' : undefined}
+					load={loadBankSuggestions}
+					keyOf={(s) => s.ref}
+					title={bankTitle}
+					detail={bankDetail}
+					onpick={pickBank}
 				/>
 			</FormField>
 			<FormField

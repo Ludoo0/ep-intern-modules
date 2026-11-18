@@ -228,9 +228,39 @@ export const participantInput = z.object({
 		.nullish()
 		.transform((v) => v ?? null),
 	allergies: optionalText(1000, true),
-	notes: optionalText(2000, true)
+	notes: optionalText(2000, true),
+	/** Nur beim Anlegen: aus der Mitgliederdatenbank übernommen (verknüpft die Teilnahme mit dem Mitglied) */
+	memberId: z.string().trim().min(1).max(100).nullish()
 });
 export type ParticipantInput = z.infer<typeof participantInput>;
+
+/** Vorschlag aus der Mitgliederdatenbank beim manuellen Anlegen (`GET /actions/:id/member-suggestions`) */
+export interface MemberSuggestion {
+	id: string;
+	name: string;
+	/** Gruppen (Namen, kommagetrennt) */
+	groupLabel: string | null;
+	/** JJJJ-MM-TT */
+	birthDate: string | null;
+	bremenResident: boolean | null;
+	/** Nur mit Recht für Gesundheitsdaten (`members.data.export`), sonst `null` */
+	diet: Diet | null;
+	allergies: string | null;
+	/** Bereits Teilnehmer*in dieser Aktion */
+	registered: boolean;
+}
+
+/** Bankverbindung aus der Kasse (`GET /bank-suggestions`), ohne Klartext */
+export interface BankSuggestion {
+	ref: string;
+	kind: 'payer' | 'payable';
+	name: string;
+	holder: string | null;
+	ibanMasked: string;
+	bic: string | null;
+}
+
+export const suggestionQuery = z.object({ search: z.string().trim().max(100).default('') });
 export type ParticipantFormInput = z.input<typeof participantInput>;
 
 // --- Antworten (DTOs) -------------------------------------------------------

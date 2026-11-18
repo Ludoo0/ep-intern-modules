@@ -7,7 +7,7 @@ paths: ["modules/treasury/**", "tests/**/treasury*", "scripts/seed-demo-treasury
 Digitale Kassenführung: Konten (Giro, Bar, …) mit Buchungen und Umbuchungen, Rechnungen (automatisch aus
 Aktionen oder manuell), Zuordnung von Zahlungen zu Posten (auch **Sammelzahlungen für Geschwister**), Zahler
 (Familien), CSV-Import mit Zuordnungsvorschlägen, Zahlungsbestätigungen und automatische Erinnerungen per Mail,
-Kontolage und Zeitraumberichte (PDF/CSV). Schema `mod_treasury`, Version 1.0.0, **hängt von `members` und `actions` ab**.
+Kontolage und Zeitraumberichte (PDF/CSV). Schema `mod_treasury`, Version 1.3.0, **hängt von `members` und `actions` ab**.
 Pfade unten relativ zu `/api/v1/modules/treasury` (UI: `apiFetch('/modules/treasury/…')`).
 
 ## Entscheidungen des Nutzers (2026-10-16, nicht ungefragt ändern)
@@ -35,7 +35,8 @@ Versand bei Änderung/Storno · Offene Posten als **eine** aufklappbare Tabelle.
 | `sync.ts` | Abgleich Aktionen → Rechnungen: `syncAll` (Job, `POST /sync`), `syncAction(ctx, actionId)` (gezielt), Warteschlange |
 | `allocation.ts` | `replaceAllocations` (Prüfungen, ergänzt Kategorie/Aktion), `loadMatchLines` |
 | `notify.ts` | `notifyPaid`, `runReminderJob`, `sendManualReminders`, `loadBankData` |
-| `service.ts` / `contract.ts` | `TreasuryService` (`provides`): `contributionsForAction`, `participantPayments`, `invoiceForRegistration`, `bankData`, `actionChanged`, `accountingClosed` für `actions`; Push-Funktionen für `orders` aus `external.ts` |
+| `bank-accounts.ts` | `searchBankAccounts({ search, limit })` (ab 2 Zeichen, ≤ 20: Zahler mit IBAN nach Name/Kontoinhaber, Empfänger von Auszahlungen `source` `manual`/`order` – je Name + IBAN-Ende nur die jüngste, Dubletten zu Zahlern entfallen; nur `ibanMasked`) und `bankAccount(ref)` (`payer:<id>`/`payable:<id>` → Klartext, sonst `null`). **Ohne Rechteprüfung** – Aufrufer (`actions`) prüft `treasury.bank.view` und auditiert (seit 1.3.0) |
+| `service.ts` / `contract.ts` | `TreasuryService` (`provides`): `contributionsForAction`, `participantPayments`, `invoiceForRegistration`, `bankData`, `searchBankAccounts`/`bankAccount`, `actionChanged`, `accountingClosed` für `actions`; Push-Funktionen für `orders` aus `external.ts` |
 | `external.ts` | Push von `orders`: `upsertOrderInvoice`, `upsertOrderPayable`, `cancelOrderPayable`, `invoiceStatus`, `payableStatus` (keine `treasury.*`-Rechteprüfung, außerhalb von Modul-Transaktionen) |
 | `annual-fee.ts` (rein) / `annual-fee.service.ts` / `annual-fee.endpoints.ts` | Jahresbeitrag: Mitgliedschaft am Stichtag, Ebenen, Planung (`annualRef`, `isMemberOn`, `isBillable`, `isLateEntry` …); Läufe anlegen/ändern/planen/versenden/nachholen; `/annual-fees[/:id]` mit Unterpfaden `preview`, `preview.pdf`, `preview-mail`, `schedule`, `unschedule`, `send`, `resend`, `catch-up` |
 | `mail-compose.ts` / `mail-html.ts` (rein) | Kassen-Mails aus Vorlage + Rechnungen + Bankdaten (`composeMail`); HTML-Bausteine (`itemsTable`, `paymentBox`, `templateToHtml`, `escapeHtml`) |

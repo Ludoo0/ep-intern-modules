@@ -63,6 +63,7 @@ import {
 import { encryptStoredHealthData } from './health';
 import { actionsBackup, hashStoredLinkTokens } from './link-tokens';
 import { withTreasurySync } from './treasury-sync';
+import { suggestionEndpoints } from './suggestions.endpoints';
 import { actionsAssist, PERM_AI } from './assist';
 import { healthRetentionSetting, onMemberDeleted, purgeHealthJob, subjectExport } from './privacy';
 
@@ -301,7 +302,8 @@ export default defineModule({
 			...exportImportEndpoints,
 			...interimEndpoints,
 			...expenseLinkEndpoints,
-			...subsidyApplicationEndpoints
+			...subsidyApplicationEndpoints,
+			...suggestionEndpoints
 		])
 	)
 });

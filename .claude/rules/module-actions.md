@@ -6,7 +6,7 @@ paths: ["modules/actions/**", "tests/**/actions*", "tests/**/accounting*", "test
 
 Freizeiten/Veranstaltungen: Stammdaten, Freigabe, Teilnehmende, Kalkulation (+ Zuschuss), öffentlicher Anmeldelink,
 Abrechnung (Buchungen, Belege, Auslagen, Abschluss, PDF) und Rückzahlung des Überschusses. Schema `mod_actions`,
-Version 1.9.0, **hängt von `members` ab**. Alle Pfade unten relativ zu `/api/v1/modules/actions` (UI: `apiFetch('/modules/actions/…')`).
+Version 1.10.0, **hängt von `members` ab**. Alle Pfade unten relativ zu `/api/v1/modules/actions` (UI: `apiFetch('/modules/actions/…')`).
 Teilnehmende sind eigene Datensätze (Name, `group_label` als Freitext); bei Anmeldung mit Mitglied zusätzlich `member_id`/`user_id` (siehe „Anmeldung mit Mitglied“).
 
 ## Dateien (`modules/actions/`)
@@ -33,6 +33,7 @@ Teilnehmende sind eigene Datensätze (Name, `group_label` als Freitext); bei Anm
 | `health.ts` | Gesundheitsdaten: `canSeeHealth`, Erkennung gesundheitsbezogener Antworten, Ver-/Entschlüsselung, Bereinigung, Bestandsmigration (siehe „Gesundheitsdaten“) |
 | `contract.ts` / `service.ts` | Vertrag `ActionsService` / Umsetzung `actionsService` (`provides`, ohne Objektrechte): `listReceivableSources`, `listActionRefs`, `listReimbursements`, `markReimbursed`, `listRefundItems`, `listReimbursementReceipts`, `downloadReceipt`, `listClosedAccountings`/`getClosedAccounting`, `listClubExpenses`/`getClubExpenseIban`/`markClubExpensePaid`, `accountingReportPdf`, `listInterims`/`interimReportPdf`, `accountingCategoryLabels` |
 | `calendar.ts` | `listCalendarActions(ctx, { from, to })` für das Kalender-Abo (`events`): sichtbare Aktionen (`actions.action.view`) + eigene Anmeldungen (`actions.own.view`, Konto oder verknüpfte Mitglieder; ohne Beschreibung/Link, `registered` = Namen); Vertrag `CalendarAction`, prüft die Rechte von `ctx` selbst |
+| `suggestions.endpoints.ts` | Autovervollständigung: `GET /actions/:id/member-suggestions` (Mitglieder beim manuellen Anlegen), `GET /bank-suggestions[/:ref]` (Bankverbindungen aus der Kasse); `canUseTreasuryBank` (siehe „Autovervollständigung“) |
 | `my.endpoints.ts` | Dashboard: `GET /my/registrations` (`loadMyRegistrations`), `GET /accounting/open` (`loadOpenAccountings`); nur lesend, ohne Audit |
 | `interim.endpoints.ts` | Zwischenabrechnungen: `GET/POST …/accounting/interims`, `DELETE …/interims/:interimId`, `GET …/interims/:interimId/report.pdf` (siehe „Zwischenabrechnungen“) |
 | `expense-link.endpoints.ts` | Kosten-Link: intern `…/expense-link[/rotate]`, `…/expense-submissions`, `…/:submissionId/receipt`, `…/accept`, `…/reject`; öffentlich `/public/expense-links/:token[/submit]` (multipart), `MAX_PENDING_SUBMISSIONS` 50 |
@@ -44,7 +45,7 @@ Teilnehmende sind eigene Datensätze (Name, `group_label` als Freitext); bei Anm
 | `search.ts` | Globale Suche (`actionsSearch`): Aktionen nach Name/Ort, sichtbar wie `GET /actions` (`visibleActionsFilter`), laufende/kommende zuerst |
 | `reset.ts` | Reset-Bereiche `all` (`rebuild`, alle Belege, `implies` `treasury:invoices` + `treasury:payables`), `accounting` (`implies` `treasury:payables`), `participants` (`implies` `treasury:invoices`); `resetUsers` |
 | `user-deleted.ts` | `onUserDeleted`: Eigentum an `transferTo`, Freigaben an die Person löschen, Anmeldungen `user_id` → `NULL`, `created_by` → `NULL` |
-| `pages/` | `ActionsPage`, `ActionDetailPage` (Tabs), `ActionForm`, `CalculationTab` (+`CalcItemsEditor`, `CalcSummary`, `SubsidySection`), `RegistrationTab` (+`FormSettings`, `DisclaimerEditor`), `ParticipantForm`, `AccountingTab` (+`AccountingSummaryCards`, `EntriesTable`, `AccountingEntryDialog`, `PayeeDialog`, `PayoutsSection`, `RefundCard`, `refund-types.ts`), `PublicRegistration` |
+| `pages/` | `ActionsPage`, `ActionDetailPage` (Tabs), `ActionForm`, `CalculationTab` (+`CalcItemsEditor`, `CalcSummary`, `SubsidySection`), `RegistrationTab` (+`FormSettings`, `DisclaimerEditor`), `ParticipantForm` (+`SuggestInput`), `AccountingTab` (+`AccountingSummaryCards`, `EntriesTable`, `AccountingEntryDialog`, `PayeeDialog`, `bank-suggest.ts`, `PayoutsSection`, `RefundCard`, `refund-types.ts`), `PublicRegistration` |
 | `pages/` (weitere) | `ParticipantsTab` (Filter-Chips, Mehrfachbearbeitung), `PaymentCell`, `ImportActionDialog`, `CloseAccountingDialog`, `InterimDialog`/`InterimsCard`, `ExpenseLinkSection`/`ExpenseSubmissionDialog`, `RefundDialog`, öffentlich `PublicConfirmRegistration` (Double-Opt-in) und `PublicExpense` (+`ReceiptPicker`, `DateInputDe`); Hilfen `auto-types.ts`, `download.ts`, `format.ts`; Dashboard-Kacheln `widgets/MyRegistrationsWidget`, `widgets/OpenAccountingWidget` |
 
 ## Datenmodell (Migrationen, nie ändern)
@@ -114,6 +115,8 @@ Eigentümer*in/`edit-all` (`canShare`). Liste: `visibleActionsFilter` (eigene + 
 | `/actions/:id/shares` | GET/PUT | PUT `{ shares: [{ type, id, level }] }` ersetzt alle Freigaben (Stamm, Gruppe, Rolle, Mitglied, Benutzer*in; `validatePrincipals`, Eigentümer*in → 422); Antwort `ActionShares` mit `everyoneLabel` |
 | `/actions/:id/shares/:userId`, `/principals`, `/users` | PUT/DELETE, GET, GET | Kurzform für Benutzer-Freigaben (eigene löschen = Aktion verlassen); `/principals` = Freigabe-Suche (nur Teilende) |
 | `/actions/:id/participants[/:pid]` | GET/POST/PUT/DELETE | `participants.csv` unter `/actions/:id/participants.csv` (Formel-Schutz); `participants.pdf` = Teilnehmendenliste (A4 quer, eine Zeile je Person, wählbare Spalten: `GET` = Voreinstellung „Fahrt“, `POST { selection }`; `GET /actions/:id/participants/pdf-columns` = Katalog; braucht zusätzlich `members.data.export`, Audit `actions.participants.sheet_generated` mit `count`, `columns`) |
+| `/actions/:id/member-suggestions` | GET | `search` (ab 2 Zeichen, sonst `[]`), ≤ 10; Bearbeiten-Zugriff + `members.member.view` (sonst 403); Ernährung/Allergien nur mit `members.data.export`; `registered` = schon Teilnehmer*in |
+| `/bank-suggestions`, `/bank-suggestions/:ref` | GET | `actions.payout.view` **und** `treasury.bank.view` (sonst 403); Liste nur maskiert (ohne Kasse `[]`), `:ref` = Klartext (`no-store`, Audit `actions.accounting.treasury_iban_viewed` nur mit `target`), unbekannt → 404 |
 | `/actions/:id/calculation` | GET/PUT | PUT ersetzt alle Posten (≤ 100), Checkliste nur bekannte Schlüssel |
 | `/actions/:id/calculation/suggestions` | GET | Zählt Teilnehmende/Team/Bremen-Kinder/-Jugend aus der Liste, `incomplete[]`, Nächte aus Datum |
 | `/actions/:id/calculation/apply` | POST/DELETE | schreibt `recommendedPerPerson`/`…Team` nach `fee_cents`/`team_fee_cents`; 400 ungespeichert, 422 bei 0 Teilnehmenden |
@@ -133,6 +136,16 @@ Eigentümer*in/`edit-all` (`canShare`). Liste: `visibleActionsFilter` (eigene + 
 | `…/accounting/refund` | GET/POST/DELETE | siehe Rückzahlung |
 | `/actions/:id/export` | GET | `application/zip`, `attachment`, `no-store`; Lesezugriff genügt (fremd → 404) |
 | `/actions/import` | POST | `actions.action.create`; multipart `file` ≤ 200 MB; 201 `{ id, name, counts, warnings }`; 422/413/503, 403 ohne `storage.write` bei Belegen |
+
+## Autovervollständigung (v1.10.0, 2026-11, keine Migration)
+- **Teilnehmende manuell anlegen** (`ParticipantForm`, `SuggestInput`): Namensfeld schlägt Mitglieder vor (`GET /actions/:id/member-suggestions`,
+  `MembersService.searchMembers` + `listMemberSheets`, außerhalb der Transaktion). Auswahl füllt Name, Gruppen, Geburtsdatum, Bremen
+  (`isBremenCity`) und – nur mit Gesundheitsrecht – Ernährung/Allergien vor. `POST …/participants` mit `memberId` verknüpft die Teilnahme
+  (`member_id`): braucht `members.member.view` (403), Mitglied muss existieren (404), schon angemeldet → 409; Audit `participant.created.fromMember`.
+- **Bankverbindungen aus der Kasse** (`AccountingEntryDialog` Stamm-Ausgabe, `PayeeDialog`; Hilfe `pages/bank-suggest.ts`): `GET /bank-suggestions`
+  über `TreasuryService.searchBankAccounts` (Zahler mit IBAN, Empfänger manueller/Bestell-Auszahlungen, nur Maske), Auswahl lädt den Klartext einzeln
+  über `GET /bank-suggestions/:ref` (`bankAccount`, auditiert). Nur mit `actions.payout.view` **und** `treasury.bank.view`; Kasse optional (`^1.3.0`).
+- Test: `tests/integration/actions-suggestions.test.ts`.
 
 ## Kalkulation (`calculation.ts`, `calculate`)
 - Posten: Kategorien `food, lodging, lodging_extra, materials, other, travel, program` sowie **Lagerbeiträge an übergeordnete Ebenen**
@@ -220,7 +233,7 @@ Eigentümer*in/`edit-all` (`canShare`). Liste: `visibleActionsFilter` (eigene + 
   `requireLogin` ohne Konto → 401, ohne `memberId` → 422, `memberId` ohne Konto 401, nicht verknüpft → 404, doppelt → 409.
   Mit Mitglied setzt der **Server** Name, Gruppen (Namen), Geburtsdatum, Bremen (`isBremenCity`), E-Mail (Mitglied, sonst Konto) und `juleica` (Zusatzfeld); Stammdatenfelder (`IDENTITY_KEYS`) werden nicht
   abgefragt (Client-Werte dafür → 422). Nach dem Speichern werden `memberKey`-Werte **ans Mitglied zurückgeschrieben** (`memberUpdated`; Fehler bricht die Anmeldung nicht ab).
-- UI `PublicRegistration`: Login-Karte mit `redirectTo`, Mitgliedsauswahl (bei Erzwingen Pflicht, sonst „Andere Person“), Stammdatenfelder ausgeblendet, Gesundheitsfelder vorausgefüllt.
+- UI `PublicRegistration`: Login-Karte mit `redirectTo` (bei Erzwingen statt Formular; sonst ohne Session kleine Karte „Mitglied mit Konto?“ mit Knopf „Einloggen“ über dem Formular, Gast-Anmeldung bleibt möglich – Nutzerentscheidung 2026-11-16), Mitgliedsauswahl (bei Erzwingen Pflicht, sonst „Andere Person“), Stammdatenfelder ausgeblendet, Gesundheitsfelder vorausgefüllt.
 
 ## Anmeldeformular
 - Bibliothek `src/lib/forms/` (Typen, Feldtyp-Registry, `validateFormValues`); Komponenten `src/lib/components/forms/`.
@@ -353,7 +366,7 @@ Anmeldung, Teilnehmende (n), Abrechnung. Abrechnung: Summenkarten, Buchungstabel
 `actions.participants.exported`, `actions.action.exported|imported`, `actions.calculation.updated`, `actions.fee.applied|cleared`,
 `actions.form.updated|token_rotated`, `actions.registration.submitted` (Akteur `public-form`),
 `actions.subsidy.application_updated|application_generated`,
-`actions.accounting.entry_created|entry_updated|entry_deleted|receipt_uploaded|receipt_deleted|payee_created|payee_updated|payee_deleted|iban_viewed|reimbursed|reimbursement_reverted|exported|closed|reopened|report|refund_booked|refund_reverted`.
+`actions.accounting.entry_created|entry_updated|entry_deleted|receipt_uploaded|receipt_deleted|payee_created|payee_updated|payee_deleted|iban_viewed|treasury_iban_viewed|reimbursed|reimbursement_reverted|exported|closed|reopened|report|refund_booked|refund_reverted`.
 Metadata nur IDs/Zähler/Beträge – keine IBAN, keine Namen aus der Rückzahlung (Test prüft das).
 
 ## Benachrichtigungen (2026-10-25, `notify.ts`, core.notifications)

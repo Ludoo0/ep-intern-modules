@@ -1,8 +1,9 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import { todayBerlin } from '$lib/sdk/dates';
 	import { tick } from 'svelte';
 	import { toast } from 'svelte-sonner';
-	import { ApiClientError, apiFetch } from '$lib/sdk/client';
+	import { ApiClientError, apiFetch, can } from '$lib/sdk/client';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
@@ -15,8 +16,10 @@
 		PARTICIPANT_ROLES,
 		PARTICIPANT_ROLE_LABELS,
 		participantInput,
+		type MemberSuggestion,
 		type Participant
 	} from '../schemas';
+	import SuggestInput from './SuggestInput.svelte';
 
 	let {
 		open = $bindable(false),
@@ -45,6 +48,8 @@
 	let diet = $state<string | null>(null);
 	let allergies = $state('');
 	let notes = $state('');
+	/** Aus der Mitgliederdatenbank übernommen (nur beim Anlegen) */
+	let member = $state<{ id: string; name: string } | null>(null);
 	let busy = $state(false);
 	let error = $state('');
 	let fieldErrors = $state<Record<string, string>>({});
@@ -63,6 +68,7 @@
 		diet = p?.diet ?? null;
 		allergies = p?.allergies ?? '';
 		notes = p?.notes ?? '';
+		member = null;
 		error = '';
 		fieldErrors = {};
 		busy = false;
@@ -122,7 +128,8 @@
 			juleica: role === 'team' ? juleica : false,
 			diet: diet || null,
 			allergies: allergies || null,
-			notes: notes || null
+			notes: notes || null,
+			memberId: !participant && member ? member.id : null
 		});
 		if (!parsed.success) {
 			const errs: Record<string, string> = {};
@@ -182,6 +189,33 @@
 		{ value: 'yes', label: 'Ja, zuschussberechtigt' },
 		{ value: 'no', label: 'Nein, nicht berechtigt' }
 	]);
+	// Vorschläge aus der Mitgliederdatenbank nur beim Anlegen und mit Recht `members.member.view`
+	const canSuggestMembers = $derived(
+		!participant && can((page.data.permissions ?? []) as string[], 'members.member.view')
+	);
+
+	function loadMembers(search: string): Promise<MemberSuggestion[]> {
+		return apiFetch<MemberSuggestion[]>(
+			`/modules/actions/actions/${actionId}/member-suggestions?search=${encodeURIComponent(search)}`
+		);
+	}
+
+	function memberDetail(m: MemberSuggestion): string {
+		const birth = m.birthDate ? m.birthDate.split('-').reverse().join('.') : null;
+		return [m.groupLabel, birth].filter(Boolean).join(' · ') || 'Mitglied';
+	}
+
+	function pickMember(m: MemberSuggestion) {
+		name = m.name;
+		groupLabel = m.groupLabel ?? '';
+		birthDate = m.birthDate ?? '';
+		bremen = m.bremenResident === true ? 'yes' : m.bremenResident === false ? 'no' : null;
+		if (m.diet) diet = m.diet;
+		if (m.allergies) allergies = m.allergies;
+		member = { id: m.id, name: m.name };
+		fieldErrors = {};
+	}
+
 	const bremenOptions = [
 		{ value: 'yes', label: 'Ja' },
 		{ value: 'no', label: 'Nein' }
@@ -199,15 +233,38 @@
 
 		<form class="space-y-4" onsubmit={submit} novalidate>
 			<FormField label="Name *" id="p-name" error={fieldErrors.name}>
-				<Input
+				<SuggestInput
 					id="p-name"
 					bind:value={name}
 					required
 					maxlength={150}
-					aria-invalid={!!fieldErrors.name}
-					aria-describedby={fieldErrors.name ? 'p-name-error' : undefined}
+					active={canSuggestMembers && !member}
+					invalid={!!fieldErrors.name}
+					describedby={fieldErrors.name ? 'p-name-error' : undefined}
+					load={loadMembers}
+					keyOf={(m) => m.id}
+					title={(m) => m.name}
+					detail={memberDetail}
+					badge={(m) => (m.registered ? 'bereits angemeldet' : null)}
+					onpick={pickMember}
 				/>
 			</FormField>
+			{#if member}
+				<p class="-mt-2 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+					Aus der Mitgliederdatenbank übernommen – die Teilnahme wird mit dem Mitglied verknüpft.
+					<button
+						type="button"
+						class="underline underline-offset-2"
+						onclick={() => (member = null)}
+					>
+						Verknüpfung lösen
+					</button>
+				</p>
+			{:else if canSuggestMembers}
+				<p class="-mt-2 text-xs text-muted-foreground">
+					Namen eintippen, um ein Mitglied aus der Mitgliederdatenbank zu übernehmen.
+				</p>
+			{/if}
 			<div class="grid gap-4 sm:grid-cols-2">
 				<FormField label="Gruppe / Herkunft" id="p-group" error={fieldErrors.groupLabel}>
 					<Input

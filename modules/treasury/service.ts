@@ -16,6 +16,7 @@ import {
 	upsertOrderPayable
 } from './external';
 import { lineOpen, sourceRef } from './logic';
+import { bankAccount, searchBankAccounts } from './bank-accounts';
 import { loadBankData } from './notify';
 import { accountingClosedNotification, notifyKasse } from './office-notify';
 import { syncAction } from './sync';
@@ -128,6 +129,9 @@ export const treasuryService: TreasuryService = {
 	bankData() {
 		return loadBankData();
 	},
+
+	searchBankAccounts,
+	bankAccount,
 
 	async actionChanged(ctx: RequestContext | null, actionId: string): Promise<void> {
 		try {
