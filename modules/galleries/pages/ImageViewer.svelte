@@ -8,6 +8,8 @@
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import LockIcon from '@lucide/svelte/icons/lock';
+	import LockOpenIcon from '@lucide/svelte/icons/lock-open';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -46,13 +48,14 @@
 	let saved = $state.raw<{
 		img: GalleryImage;
 		description: string | null;
+		isPrivate: boolean;
 	} | null>(null);
 	const shown = $derived.by(() => {
 		if (!current) return null;
 		if (saved && saved.img === current) {
-			return { description: saved.description };
+			return { description: saved.description, isPrivate: saved.isPrivate };
 		}
-		return { description: current.description };
+		return { description: current.description, isPrivate: current.isPrivate };
 	});
 
 	const isCover = $derived(!!current && current.id === coverImageId);
@@ -193,7 +196,11 @@
 				method: 'PUT',
 				body: JSON.stringify(parsed.data)
 			});
-			saved = { img, description: parsed.data.description };
+			saved = {
+				img,
+				description: parsed.data.description,
+				isPrivate: shown?.isPrivate ?? img.isPrivate
+			};
 			editing = false;
 			editingId = null;
 			toast.success('Bild gespeichert');
@@ -206,6 +213,30 @@
 			} else {
 				formError = 'Speichern fehlgeschlagen';
 			}
+		} finally {
+			busy = false;
+		}
+	}
+
+	/** „Nur intern“ umschalten (Beschreibung bleibt wie angezeigt) */
+	async function setPrivate(isPrivate: boolean) {
+		const img = current;
+		if (!img || !shown || busy) return;
+		busy = true;
+		try {
+			await apiFetch(`${base}/images/${img.id}`, {
+				method: 'PUT',
+				body: JSON.stringify({ description: shown.description, isPrivate })
+			});
+			saved = { img, description: shown.description, isPrivate };
+			toast.success(
+				isPrivate
+					? 'Bild ist nur intern – nicht auf der Website'
+					: 'Bild wieder mit der Galerie sichtbar'
+			);
+			onchanged();
+		} catch (err) {
+			toast.error(err instanceof Error && err.message ? err.message : 'Aktion fehlgeschlagen');
 		} finally {
 			busy = false;
 		}
@@ -346,6 +377,12 @@
 								Titelbild
 							</Badge>
 						{/if}
+						{#if shown.isPrivate}
+							<Badge variant="secondary" class="gap-1">
+								<LockIcon class="size-3" aria-hidden="true" />
+								Nur intern
+							</Badge>
+						{/if}
 					</Dialog.Title>
 					<Dialog.Description class="text-muted-foreground text-xs">
 						Hochgeladen am {formatUploaded(current.createdAt)} · {current.width} × {current.height} px
@@ -433,6 +470,17 @@
 								Titelbild zurücksetzen
 							</Button>
 						{/if}
+						{#if shown.isPrivate}
+							<Button variant="outline" size="sm" onclick={() => setPrivate(false)} disabled={busy}>
+								<LockOpenIcon />
+								Für Website freigeben
+							</Button>
+						{:else}
+							<Button variant="outline" size="sm" onclick={() => setPrivate(true)} disabled={busy}>
+								<LockIcon />
+								Nur intern
+							</Button>
+						{/if}
 					{/if}
 					<Button
 						variant="outline"
@@ -455,6 +503,12 @@
 						</Button>
 					{/if}
 				</div>
+				{#if shown.isPrivate && !editing}
+					<p class="text-muted-foreground -mt-2 text-xs">
+						Nur intern: Das Bild erscheint nie auf der Stammeswebsite, auch wenn die Galerie
+						öffentlich ist.
+					</p>
+				{/if}
 				{#if canEdit && isCover && coverIsDefault && !editing}
 					<p class="text-muted-foreground -mt-2 text-xs">
 						Titelbild ist automatisch das zuerst hochgeladene Bild.

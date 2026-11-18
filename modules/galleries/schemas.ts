@@ -126,13 +126,20 @@ export const coverInput = z.object({ imageId: z.uuid('Ungültige ID').nullable()
 /** Textfelder des Upload-Formulars (multipart; Datei im Feld `file`) */
 export const uploadFields = z.object({ description: optionalText(MAX_IMAGE_DESCRIPTION) });
 
-/** PUT `/galleries/:id/images/:imageId` – ersetzt die Beschreibung */
+/**
+ * PUT `/galleries/:id/images/:imageId` – ersetzt die Beschreibung; `isPrivate` (optional, sonst
+ * unverändert) = Bild nur intern, nie über die Website-API
+ */
 export const imageUpdateInput = z
-	.object({ description: optionalText(MAX_IMAGE_DESCRIPTION) })
+	.object({
+		description: optionalText(MAX_IMAGE_DESCRIPTION),
+		isPrivate: z.boolean().optional()
+	})
 	.strict();
 export type ImageUpdateInput = z.infer<typeof imageUpdateInput>;
 
-export const BULK_ACTIONS = ['delete'] as const;
+/** `make-private` = nur intern (nie auf der Website), `make-public` = wieder mit der Galerie sichtbar */
+export const BULK_ACTIONS = ['delete', 'make-private', 'make-public'] as const;
 export type BulkAction = (typeof BULK_ACTIONS)[number];
 
 /** POST `/galleries/:id/images/bulk` */
@@ -241,6 +248,8 @@ export interface GalleryImage {
 	contentType: string;
 	originalName: string;
 	position: number;
+	/** Nur intern: nie über die Website-API, auch wenn die Galerie öffentlich ist */
+	isPrivate: boolean;
 	uploadedBy: string | null;
 	createdAt: string;
 }

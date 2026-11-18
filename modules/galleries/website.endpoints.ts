@@ -2,6 +2,8 @@
  * Website-Endpoints (API-Key der Stammeswebsite mit Scope `galleries.website.read`).
  * Liefern NUR Galerien mit `visibility = 'public'` – unabhängig von Freigaben – und nur die Felder
  * der Website-DTOs (keine Eigentümer*innen, Freigaben, Dateinamen oder Uploader).
+ * Bilder mit „nur intern“ (`is_private`) gibt es hier nie: nicht in Liste, Detail, Bildanzahl,
+ * Titelbild oder als Datei.
  * Core-Aufrufe (`events`-Dienst, Storage) laufen außerhalb der Modul-Transaktion (PGlite).
  */
 import { sql } from 'drizzle-orm';
@@ -16,7 +18,7 @@ import {
 	type Tx
 } from '$lib/sdk/server';
 import type { EventRefInfo } from '$modules/events/contract';
-import { VARIANT_COLUMN, db, effectiveCoverSql, eventsService, fileResponse } from './files';
+import { VARIANT_COLUMN, db, eventsService, fileResponse, websiteCoverSql } from './files';
 import {
 	idParams,
 	websiteListQuery,
@@ -63,12 +65,12 @@ function galleryOf(r: Row, events: WebsiteEventRef[]): WebsiteGallery {
 	};
 }
 
-/** Spalten für Galerien inkl. Bildanzahl und effektivem Titelbild (Alias `g`, Join `c`) */
+/** Spalten für Galerien inkl. Bildanzahl und Titelbild – nur nicht private Bilder (Alias `g`, Join `c`) */
 const GALLERY_SELECT = sql`SELECT g.id, g.title, g.description, g.updated_at,
-	(SELECT count(*)::int FROM gallery_images x WHERE x.gallery_id = g.id) AS image_count,
+	(SELECT count(*)::int FROM gallery_images x WHERE x.gallery_id = g.id AND NOT x.is_private) AS image_count,
 	c.id AS cover_id, c.width AS cover_width, c.height AS cover_height
 	FROM galleries g
-	LEFT JOIN gallery_images c ON c.id = ${effectiveCoverSql}`;
+	LEFT JOIN gallery_images c ON c.id = ${websiteCoverSql}`;
 
 /** Termin-Verweise mit „auf der Website“ je Termin-ID (ohne `events` leer) */
 async function websiteEventMap(eventIds: readonly string[]): Promise<Map<string, WebsiteEventRef>> {
@@ -139,7 +141,8 @@ export const websiteEndpoints: AnyApiEndpoint[] = [
 			'Liefert `{ items, total }` mit allen Galerien, die auf „öffentlich“ stehen (unabhängig von ' +
 			'Freigaben), neueste Änderung zuerst (`updatedAt` absteigend, dann Titel). Je Galerie: ' +
 			'Titel, Beschreibung, Bildanzahl und effektives Titelbild (`cover`: gesetztes Titelbild oder ' +
-			'das zuerst hochgeladene Bild, `null` ohne Bilder). Nur öffentliche Felder: keine ' +
+			'das zuerst hochgeladene Bild, `null` ohne Bilder). Bilder mit „nur intern“ zählen nicht mit ' +
+			'und werden nie Titelbild. Nur öffentliche Felder: keine ' +
 			'Freigaben, Eigentümer*innen, Dateinamen oder Uploader. `events` = zugeordnete Termine, ' +
 			'nur solche mit „auf der Website“. Mit `eventId` nur Galerien zu diesem Termin (steht der ' +
 			'Termin nicht auf der Website, ist die Liste leer). Blättern mit `limit`/`offset`. ' +
@@ -186,7 +189,7 @@ export const websiteEndpoints: AnyApiEndpoint[] = [
 		description:
 			'Liefert die Bilddatei (WebP, ohne Metadaten) in der Variante `thumb` (480 px lange Kante) ' +
 			'oder `web` (2048 px). Die Originalauflösung (`full`) ist nur intern abrufbar. Das Bild ' +
-			'muss zu einer öffentlichen Galerie gehören, sonst 404. Antwort mit ' +
+			'muss zu einer öffentlichen Galerie gehören und darf nicht „nur intern“ sein, sonst 404. Antwort mit ' +
 			'`Cache-Control: public, max-age=86400` – bitte auf dem Website-Server zwischenspeichern ' +
 			'(der API-Key darf nicht im Browser landen, Bilder also über den eigenen Server ausliefern). ' +
 			'Eigenes Rate-Limit für Bilder (1200/60 s), da eine Seite viele Bilder lädt.',
@@ -203,7 +206,7 @@ export const websiteEndpoints: AnyApiEndpoint[] = [
 						FROM gallery_images i
 						JOIN galleries g ON g.id = i.gallery_id
 						WHERE i.id = ${params.imageId} AND i.gallery_id = ${params.id}
-							AND g.visibility = 'public'`
+							AND g.visibility = 'public' AND NOT i.is_private`
 				);
 				return row?.path ? String(row.path) : null;
 			});
@@ -217,7 +220,8 @@ export const websiteEndpoints: AnyApiEndpoint[] = [
 		summary: 'Öffentliche Galerie mit Bildern für die Stammeswebsite',
 		description:
 			'Liefert eine öffentliche Galerie (inkl. Termine mit „auf der Website“) mit allen Bildern ' +
-			'(ID, Beschreibung, Masse, Position), sortiert nach Upload-Zeitpunkt. Private oder unbekannte ' +
+			'(ID, Beschreibung, Masse, Position), sortiert nach Upload-Zeitpunkt; Bilder mit „nur intern“ ' +
+			'fehlen. Private oder unbekannte ' +
 			'Galerien → 404. Bilddateien über `/website/galleries/:id/images/:imageId/thumb|web`. ' +
 			KEY_HINT,
 		tags: TAGS,
@@ -236,7 +240,7 @@ export const websiteEndpoints: AnyApiEndpoint[] = [
 					tx,
 					sql`SELECT id, gallery_id, description, width, height, position
 						FROM gallery_images
-						WHERE gallery_id = ${params.id}
+						WHERE gallery_id = ${params.id} AND NOT is_private
 						ORDER BY created_at ASC, id ASC`
 				);
 				const links = await linksFor(tx, [params.id]);

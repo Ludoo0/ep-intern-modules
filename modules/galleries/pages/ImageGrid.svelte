@@ -1,5 +1,6 @@
 <script lang="ts">
 	import StarIcon from '@lucide/svelte/icons/star';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { imageUrl, type GalleryImage } from '../schemas';
 
@@ -36,6 +37,7 @@
 		const base = img.description ?? `Bild ${index + 1}`;
 		const parts = [base];
 		if (img.id === coverImageId) parts.push('Titelbild');
+		if (img.isPrivate) parts.push('nur intern');
 		return parts.join(', ');
 	}
 </script>
@@ -82,6 +84,15 @@
 						>
 							<StarIcon class="size-3 fill-warning text-warning" aria-hidden="true" />
 							Titelbild
+						</span>
+					{/if}
+					{#if img.isPrivate}
+						<span
+							class="bg-background/90 text-foreground absolute bottom-1.5 left-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium shadow-sm"
+							title="Nur intern – wird nicht auf der Website gezeigt"
+						>
+							<LockIcon class="size-3" aria-hidden="true" />
+							Nur intern
 						</span>
 					{/if}
 				</button>

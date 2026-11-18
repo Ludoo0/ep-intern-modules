@@ -33,6 +33,8 @@ import type {
 	WebsiteGalleryDetail
 } from '$modules/galleries/schemas';
 import type { RequestContext } from '$lib/sdk/types';
+import type { GalleryRefsService } from '$modules/galleries/contract';
+import { galleryRefsService } from '$modules/galleries/refs.service';
 
 const ROOT = 'http://localhost:5173/api/v1/modules/galleries';
 const keys: Record<string, string> = {};
@@ -428,5 +430,141 @@ describe('Meta-Endpoints', () => {
 		const data = ok<{ name: string }>(await call('owner', 'GET', '/settings/stamm'));
 		expect(typeof data.name).toBe('string');
 		expect(data.name.length).toBeGreaterThan(0);
+	});
+});
+
+describe('Bilder „nur intern“ (is_private)', () => {
+	const fileUrl = (g: string, i: string, v: string) => `/website/galleries/${g}/images/${i}/${v}`;
+	let a: GalleryImage;
+	let b: GalleryImage;
+	let c: GalleryImage;
+
+	beforeAll(async () => {
+		a = await upload(otherPublicG.id, await jpeg('#111111'), 'a.jpg', 'Erstes');
+		b = await upload(otherPublicG.id, await jpeg('#222222', 400, 300), 'b.jpg');
+		c = await upload(otherPublicG.id, await jpeg('#333333'), 'c.jpg');
+		expect([a.isPrivate, b.isPrivate, c.isPrivate]).toEqual([false, false, false]);
+	});
+
+	it('PUT setzt isPrivate; ohne Feld bleibt es unverändert; nur mit edit', async () => {
+		const img = ok<GalleryImage>(
+			await call('owner', 'PUT', `/galleries/${otherPublicG.id}/images/${a.id}`, {
+				description: 'Erstes',
+				isPrivate: true
+			})
+		);
+		expect(img.isPrivate).toBe(true);
+		const again = ok<GalleryImage>(
+			await call('owner', 'PUT', `/galleries/${otherPublicG.id}/images/${a.id}`, {
+				description: 'Erstes, neu'
+			})
+		);
+		expect(again).toMatchObject({ isPrivate: true, description: 'Erstes, neu' });
+		fail(
+			await call('reader', 'PUT', `/galleries/${otherPublicG.id}/images/${b.id}`, {
+				description: null,
+				isPrivate: true
+			}),
+			403,
+			'forbidden'
+		);
+		fail(
+			await call('owner', 'PUT', `/galleries/${otherPublicG.id}/images/${b.id}`, {
+				description: null,
+				isPrivate: 'ja'
+			}),
+			422,
+			'validation_failed'
+		);
+	});
+
+	it('Website: privates Bild fehlt in Detail, Bildanzahl, Titelbild und als Datei', async () => {
+		// gesetztes Titelbild ist privat → ältestes nicht privates Bild gilt
+		ok(await call('owner', 'PUT', `/galleries/${otherPublicG.id}/cover`, { imageId: a.id }));
+		const d = ok(
+			await call<WebsiteGalleryDetail>('website', 'GET', `/website/galleries/${otherPublicG.id}`)
+		);
+		websiteGalleryDetailSchema.parse(d);
+		expect(d.images.map((i) => i.id)).toEqual([b.id, c.id]);
+		expect(d.imageCount).toBe(2);
+		expect(d.cover).toEqual({ imageId: b.id, width: 400, height: 300 });
+		expect(JSON.stringify(d)).not.toContain(a.id);
+
+		const list = listOf<WebsiteGallery>(ok(await call('website', 'GET', '/website/galleries')));
+		const item = list.find((g) => g.id === otherPublicG.id)!;
+		expect(item).toMatchObject({ imageCount: 2, cover: { imageId: b.id } });
+
+		for (const v of ['thumb', 'web']) {
+			fail(await call('website', 'GET', fileUrl(otherPublicG.id, a.id, v)), 404, 'not_found');
+			expect((await raw('website', 'GET', fileUrl(otherPublicG.id, b.id, v))).status).toBe(200);
+		}
+	});
+
+	it('intern bleibt das Bild sichtbar und abrufbar (Titelbild intern unverändert)', async () => {
+		const d = ok(await call<GalleryDetail>('reader', 'GET', `/galleries/${otherPublicG.id}`));
+		expect(d.images.map((i) => [i.id, i.isPrivate])).toEqual([
+			[a.id, true],
+			[b.id, false],
+			[c.id, false]
+		]);
+		expect(d.coverImageId).toBe(a.id);
+		const res = await raw('reader', 'GET', `/galleries/${otherPublicG.id}/images/${a.id}/thumb`);
+		expect(res.status).toBe(200);
+	});
+
+	it('Verweis-Dienst zählt für öffentliche Verweise nur nicht private Bilder', async () => {
+		const service: GalleryRefsService = galleryRefsService;
+		const [ref] = await service.publicGalleryRefs([otherPublicG.id]);
+		expect(ref?.imageCount).toBe(2);
+	});
+
+	it('Sammelaktion make-private / make-public mit Audit', async () => {
+		const r = ok<{ affected: number }>(
+			await call('owner', 'POST', `/galleries/${otherPublicG.id}/images/bulk`, {
+				action: 'make-private',
+				ids: [b.id, c.id]
+			}),
+			201
+		);
+		expect(r.affected).toBe(2);
+		let d = ok(
+			await call<WebsiteGalleryDetail>('website', 'GET', `/website/galleries/${otherPublicG.id}`)
+		);
+		expect(d.images).toEqual([]);
+		expect(d.imageCount).toBe(0);
+		expect(d.cover).toBeNull();
+
+		ok(
+			await call('owner', 'POST', `/galleries/${otherPublicG.id}/images/bulk`, {
+				action: 'make-public',
+				ids: [a.id, b.id, c.id]
+			}),
+			201
+		);
+		d = ok(
+			await call<WebsiteGalleryDetail>('website', 'GET', `/website/galleries/${otherPublicG.id}`)
+		);
+		expect(d.images.map((i) => i.id)).toEqual([a.id, b.id, c.id]);
+		expect(d.cover?.imageId).toBe(a.id);
+
+		// fremdes Bild in der Auswahl → 404, nichts geändert
+		fail(
+			await call('owner', 'POST', `/galleries/${otherPublicG.id}/images/bulk`, {
+				action: 'make-private',
+				ids: [a.id, pubImg1.id]
+			}),
+			404,
+			'not_found'
+		);
+		fail(
+			await call('reader', 'POST', `/galleries/${otherPublicG.id}/images/bulk`, {
+				action: 'make-private',
+				ids: [a.id]
+			}),
+			403,
+			'forbidden'
+		);
+		const after = ok(await call<GalleryDetail>('owner', 'GET', `/galleries/${otherPublicG.id}`));
+		expect(after.images.every((i) => !i.isPrivate)).toBe(true);
 	});
 });

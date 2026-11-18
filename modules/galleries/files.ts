@@ -81,6 +81,16 @@ export const effectiveCoverSql: SQL = sql`COALESCE(g.cover_image_id, (
 	SELECT i.id FROM gallery_images i WHERE i.gallery_id = g.id ORDER BY i.created_at, i.id LIMIT 1
 ))`;
 
+/**
+ * Titelbild für die Website (Alias `g`): wie `effectiveCoverSql`, aber nur Bilder ohne „nur intern“ –
+ * ist das gesetzte Titelbild privat, gilt das älteste nicht private Bild.
+ */
+export const websiteCoverSql: SQL = sql`COALESCE(
+	(SELECT i.id FROM gallery_images i WHERE i.id = g.cover_image_id AND NOT i.is_private),
+	(SELECT i.id FROM gallery_images i WHERE i.gallery_id = g.id AND NOT i.is_private
+		ORDER BY i.created_at, i.id LIMIT 1)
+)`;
+
 /** Effektives Titelbild einer Galerie (in der Transaktion) */
 export async function effectiveCover(
 	tx: Tx,

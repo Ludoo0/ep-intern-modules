@@ -9,7 +9,7 @@ import type { GalleryImage, ImageVariant } from './schemas';
 /** Spalten für `toGalleryImage` (Alias `i` für `gallery_images`) */
 export const IMAGE_COLUMNS = sql`i.id, i.gallery_id, i.description, i.position, i.original_name,
 	i.content_type, i.width, i.height, i.size_bytes, i.thumb_path, i.web_path, i.full_path,
-	i.uploaded_by, i.created_at`;
+	i.uploaded_by, i.created_at, i.is_private`;
 
 /** Zeile aus `gallery_images` → DTO */
 export function toGalleryImage(row: Row): GalleryImage {
@@ -22,6 +22,7 @@ export function toGalleryImage(row: Row): GalleryImage {
 		contentType: String(row.content_type),
 		originalName: String(row.original_name),
 		position: Number(row.position),
+		isPrivate: row.is_private === true || row.is_private === 't',
 		uploadedBy: row.uploaded_by == null ? null : String(row.uploaded_by),
 		createdAt: toIso(row.created_at)
 	};

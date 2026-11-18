@@ -42,14 +42,39 @@ export const imagesEndpoints: AnyApiEndpoint[] = [
 	defineEndpoint({
 		method: 'POST',
 		path: '/galleries/:id/images/bulk',
-		summary: 'Sammelaktion für Bilder (löschen)',
+		summary: 'Sammelaktion für Bilder (löschen, nur intern / wieder öffentlich)',
+		description:
+			'`delete` löscht Bilder samt Dateien. `make-private` markiert Bilder als „nur intern“: Sie ' +
+			'erscheinen nie über die Website-API, auch wenn die Galerie öffentlich ist. `make-public` ' +
+			'hebt das wieder auf (sichtbar, sobald die Galerie öffentlich ist).',
 		tags,
 		permission: 'galleries.gallery.view',
 		params: idParams,
 		body: imageBulkInput,
 		handler: async ({ ctx, params, body }): Promise<BulkResult> => {
 			const keys = await principalKeysFor(ctx, MODULE_ID);
-			// einzige Aktion: delete (Termine hängen an der Galerie, nicht am Bild)
+			if (body.action !== 'delete') {
+				const isPrivate = body.action === 'make-private';
+				const count = await db().transaction(async (tx) => {
+					await requireAccess(tx, ctx, params.id, keys, 'edit');
+					const images = await requireImagesOfGallery(tx, params.id, body.ids);
+					await tx.execute(
+						sql`UPDATE gallery_images SET is_private = ${isPrivate}
+							WHERE gallery_id = ${params.id} AND id IN (${sql.join(
+								body.ids.map((id) => sql`${id}`),
+								sql`, `
+							)})`
+					);
+					await tx.execute(sql`UPDATE galleries SET updated_at = now() WHERE id = ${params.id}`);
+					return images.length;
+				});
+				await core.audit.logFromContext(ctx, 'galleries.image.bulk_updated', {
+					target: params.id,
+					metadata: { action: body.action, count }
+				});
+				return { affected: count };
+			}
+			// Termine hängen an der Galerie, nicht am Bild
 			const removed = await db().transaction(async (tx) => {
 				await requireAccess(tx, ctx, params.id, keys, 'edit');
 				const images = await requireImagesOfGallery(tx, params.id, body.ids);
@@ -178,7 +203,10 @@ export const imagesEndpoints: AnyApiEndpoint[] = [
 	defineEndpoint({
 		method: 'PUT',
 		path: '/galleries/:id/images/:imageId',
-		summary: 'Beschreibung eines Bildes ersetzen',
+		summary: 'Beschreibung eines Bildes ersetzen, optional „nur intern“ setzen',
+		description:
+			'`isPrivate: true` = Bild nur intern (nie über die Website-API, auch nicht als Titelbild), ' +
+			'`false` = mit der Galerie sichtbar; fehlt das Feld, bleibt es unverändert.',
 		tags,
 		permission: 'galleries.gallery.view',
 		params: imageParams,
@@ -190,6 +218,7 @@ export const imagesEndpoints: AnyApiEndpoint[] = [
 				await requireImageRow(tx, params.id, params.imageId);
 				await tx.execute(
 					sql`UPDATE gallery_images SET description = ${body.description}
+						${body.isPrivate === undefined ? sql`` : sql`, is_private = ${body.isPrivate}`}
 						WHERE id = ${params.imageId} AND gallery_id = ${params.id}`
 				);
 				await tx.execute(sql`UPDATE galleries SET updated_at = now() WHERE id = ${params.id}`);
@@ -198,7 +227,7 @@ export const imagesEndpoints: AnyApiEndpoint[] = [
 			const image = toGalleryImage(row);
 			await core.audit.logFromContext(ctx, 'galleries.image.updated', {
 				target: params.imageId,
-				metadata: { galleryId: params.id }
+				metadata: { galleryId: params.id, isPrivate: image.isPrivate }
 			});
 			return image;
 		}

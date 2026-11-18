@@ -19,7 +19,10 @@ export interface GalleryRefsService {
 	 * höchstens `limit` (1–50, Standard 20). Ohne Rechteprüfung – öffentliche Galerien sind für alle sichtbar.
 	 */
 	searchPublicGalleryRefs(opts?: { search?: string; limit?: number }): Promise<GalleryRefInfo[]>;
-	/** Öffentliche Galerien aus `ids` (unbekannte/private fehlen), Reihenfolge wie `ids`, höchstens 100 */
+	/**
+	 * Öffentliche Galerien aus `ids` (unbekannte/private fehlen), Reihenfolge wie `ids`, höchstens 100.
+	 * `imageCount` zählt bei öffentlichen Verweisen nur Bilder ohne „nur intern“.
+	 */
 	publicGalleryRefs(ids: readonly string[]): Promise<GalleryRefInfo[]>;
 	/**
 	 * Galerien, die `ctx` sehen darf (wie `GET /galleries`: eigene, öffentliche, freigegebene, `view-all`), Suche im Titel,

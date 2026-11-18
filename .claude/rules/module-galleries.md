@@ -4,10 +4,11 @@ paths: ["modules/galleries/**", "tests/**/galleries*", "src/lib/server/core/imag
 
 # Modul `galleries` (Galerien)
 
-Fotos intern sammeln und ausgewählte Galerien auf der **Stammeswebsite** zeigen. Schema `mod_galleries`, Version 1.2.0,
+Fotos intern sammeln und ausgewählte Galerien auf der **Stammeswebsite** zeigen. Schema `mod_galleries`, Version 1.4.0,
 startet deaktiviert, keine harten Abhängigkeiten; `optionalDependencies: ['members', 'events']` (Gruppen/Mitglieder als
 Freigabe-Ziele, Termine für die Zuordnung **ganzer Galerien** (nicht einzelner Bilder) – ohne `events` entfällt die Zuordnung still, Eingabe → 422).
-Freigabe nach dem Muster `events` (**Freigabe an Principals**, siehe `architecture.md`), dazu je Galerie **öffentlich/privat**.
+Freigabe nach dem Muster `events` (**Freigabe an Principals**, siehe `architecture.md`), dazu je Galerie **öffentlich/privat**
+und je Bild **„nur intern“** (nie auf der Website, auch in öffentlichen Galerien).
 Bildverarbeitung serverseitig über den Core-Dienst `core.images` (sharp). Navigation „Galerien“ (Icon `images`).
 
 ## Dateien (`modules/galleries/`)
@@ -25,6 +26,7 @@ Bildverarbeitung serverseitig über den Core-Dienst `core.images` (sharp). Navig
 | `meta.endpoints.ts` | `/principals`, `/events` (Terminsuche über den `events`-Dienst), `/settings/stamm` → `{ name }` (für `everyoneLabel`) |
 | `website.endpoints.ts` | `/website/galleries[/:id]` (mit Website-Terminen, Filter `eventId`), Bilddateien `thumb`/`web` |
 | `website.schemas.ts` | Zod-Vertrag der Website-DTOs (#48): `websiteGallerySchema`, `websiteGalleryDetailSchema`, `websiteGalleryListSchema`, `websiteEventRefSchema`; Typgleichheit zu den DTOs geprüft, Integrationstests parsen die Antworten dagegen |
+| `assist.ts` | KI-Schreibhilfe (`galleries.ai.use`): Galerie- und Bildbeschreibung; Kontext `galleries:image` (`<galerie>:<bild>`) schickt die Web-Variante nur mit `core.ai.assist.allowImages` |
 | `search.ts` | Globale Suche (`galleriesSearch`): Galerien nach Titel/Beschreibung, sichtbar wie `GET /galleries` (`visibleGalleriesFilter`, Principal-Schlüssel vor der Transaktion), zuletzt geänderte zuerst |
 | `user-deleted.ts` | `onUserDeleted`: Freigaben `user:<id>` löschen, Eigentum an `transferTo` (sonst unverändert), `created_by`/`uploaded_by`/`public_confirmed_by` → `NULL` |
 | `reset.ts` | Reset-Bereich `all` (vier Tabellen, Kind vor Eltern, `storagePrefixes: 'all'`, `rebuild`), `resetUsers` (Benutzer-Freigaben löschen, `owner_id`/`created_by`/`uploaded_by` auf den verbleibenden Benutzer) |
@@ -32,14 +34,14 @@ Bildverarbeitung serverseitig über den Core-Dienst `core.images` (sharp). Navig
 | `pages/GalleryDialog.svelte` | Anlegen/Bearbeiten: Titel, Beschreibung, Sichtbarkeit, **Termine** (`EventPicker`), `SharePanel` lokal (nur Anlegen) |
 | `pages/GalleryDetailPage.svelte` | Kopf mit **`ShareMenu` oben rechts** (`type`, `everyoneLabel`), Bearbeiten/Löschen, Bilder |
 | `pages/UploadZone.svelte` | Mehrfachauswahl, Drag & Drop, Fortschritt, 3 Uploads parallel (`UPLOAD_CONCURRENCY`) |
-| `pages/ImageGrid.svelte` | Bildraster (`thumb`), Badge „Titelbild“, Auswahlmodus |
-| `pages/ImageViewer.svelte` | Lightbox (←/→), Beschreibung bearbeiten, „Als Titelbild festlegen“, Download `full` |
+| `pages/ImageGrid.svelte` | Bildraster (`thumb`), Badges „Titelbild“ und „Nur intern“, Auswahlmodus |
+| `pages/ImageViewer.svelte` | Lightbox (←/→), Beschreibung bearbeiten, „Als Titelbild festlegen“, „Nur intern“ / „Für Website freigeben“, Download `full` |
 | `pages/EventPicker.svelte` | Terminsuche (`GET /events?search=`), Mehrfachauswahl – im `GalleryDialog` (Feld „Termine“) |
 | `pages/EventBadges.svelte` | Termine als Badges (Detailkopf; Karte mit `max={1} compact`) |
-| `pages/ImageBulkBar.svelte` | Sammelleiste im Auswahlmodus: Löschen |
+| `pages/ImageBulkBar.svelte` | Sammelleiste im Auswahlmodus: Nur intern, Für Website freigeben, Löschen |
 | `contract.ts`, `refs.service.ts` | Dienst `GalleryRefsService` über `provides` (2026-10-25, für `website`): `searchPublicGalleryRefs`, `publicGalleryRefs` – nur öffentliche Galerien, ohne Rechteprüfung |
 | `subject-export.ts` | Datenauskunft (`subjectExport`, Art. 15/20): eigene Galerien, hochgeladene Bilder (nur Metadaten), Freigaben an das Konto, Veröffentlichungs-Bestätigungen |
-| `migrations/0001_init.sql`, `0002_gallery_events.sql`, `0003_publish_confirmation.sql` | Schema; Termine je Galerie; Bestätigung beim Veröffentlichen |
+| `migrations/0001_init.sql` … `0004_image_private.sql` | Schema; Termine je Galerie; Bestätigung beim Veröffentlichen; Bilder „nur intern“ |
 
 ## Datenmodell (0001)
 - IDs sind `text` (UUID per `crypto.randomUUID()`), Zeitstempel `timestamptz`, keine FKs auf Core-/Fremdschemata.
@@ -53,6 +55,7 @@ Bildverarbeitung serverseitig über den Core-Dienst `core.images` (sharp). Navig
 - `gallery_events` (0002, PK `gallery_id` + `event_id`, FK `gallery_id` CASCADE): Zuordnung der **ganzen Galerie** zu Terminen
   aus `events` (`event_id` ohne FK, anderes Schema), Index `event_id`. Migration 0002 hat vorhandene Bild-Zuordnungen auf die Galerie übernommen.
 - 0003: `galleries.public_confirmed_at`/`public_confirmed_by` (Benutzer-ID ohne FK) – letzte Bestätigung der Einwilligungen beim Veröffentlichen.
+- 0004: `gallery_images.is_private` boolean NOT NULL DEFAULT false – Bild „nur intern“ (siehe Website-Anbindung).
 - `gallery_shares`: `<obj>_shares`-Muster (PK `gallery_id` + `principal_type` + `principal_id`, `principal_type` CHECK
   `everyone|group|role|user|member`, `level` CHECK `read|edit`, `created_by`, `created_at`), Index `(principal_type, principal_id)`.
 
@@ -93,8 +96,8 @@ Bearbeiten bei Änderungen → **403**.
 | DELETE `/galleries/:id` | Objekt-`edit` | CASCADE; Dateien **nach** der Transaktion best-effort entfernen |
 | PUT `/galleries/:id/cover` | Objekt-`edit` | `{ imageId \| null }` (null = Standard); fremdes Bild → 422 |
 | POST `/galleries/:id/images` | Objekt-`edit` | multipart `file` (+ optional `description`), ≤ 25 MB, ≤ 2000 Bilder je Galerie; **ein Request je Datei** |
-| PUT `/galleries/:id/images/:imageId` | Objekt-`edit` | `{ description }` (strikt; `eventIds` am Bild → 422) |
-| POST `/galleries/:id/images/bulk` | Objekt-`edit` | `{ action: 'delete', ids ≤ 200 }` → `{ affected }` |
+| PUT `/galleries/:id/images/:imageId` | Objekt-`edit` | `{ description, isPrivate? }` (strikt; `isPrivate` fehlt → unverändert; `eventIds` am Bild → 422) |
+| POST `/galleries/:id/images/bulk` | Objekt-`edit` | `{ action: 'delete' \| 'make-private' \| 'make-public', ids ≤ 200 }` → `{ affected }`; fremde ID → 404, nichts geändert |
 | DELETE `/galleries/:id/images/:imageId` | Objekt-`edit` | Bild + Dateien |
 | GET `/galleries/:id/images/:imageId/:variant` | gallery.view + Objekt-`read` | `thumb\|web\|full`, rohe Response (gestreamt), `private, max-age=3600`, `nosniff`; `full` mit `content-disposition: attachment`; eigenes Rate-Limit `IMAGE_RATE_LIMIT` (1200/60 s, #23 – das Standardlimit 120/60 s gilt je Endpunktmuster, also für alle Bilder zusammen) |
 | GET `/principals` | gallery.view | Query `search` (2–100 Zeichen) → `searchPrincipals`; nur mit `create`/`edit-all`/eigener Galerie/`edit`-Freigabe (sonst 403), 60/60 s; Mitglieder nur mit `members.member.view`, E-Mail nur mit `core.users.view` |
@@ -109,6 +112,10 @@ Audit: `galleries.gallery.created|updated|deleted|cover_changed|published|unpubl
 ## Website-Anbindung
 - Nur Galerien mit `visibility = public`, nur öffentliche Felder (`WebsiteGallery`, `WebsiteImage`): keine Freigaben,
   Eigentümer*innen, Dateinamen, Uploader. Termine der Galerie nur, wenn sie selbst „auf der Website“ stehen (`websiteEventRefs`). Bilder zu einem Termin: `GET /website/galleries?eventId=` und dann das Detail.
+- **Bilder „nur intern“** (`is_private`, seit 1.4.0): erscheinen über `/website/…` **nie** – nicht im Detail, nicht in `imageCount`,
+  nie als `cover` (gesetztes Titelbild privat → ältestes nicht privates Bild, `websiteCoverSql` in `files.ts`; nur private Bilder → `cover: null`),
+  Datei → 404. Ebenso zählt `publicGalleryRefs`/`searchPublicGalleryRefs` (Blog im Modul `website`) nur nicht private Bilder.
+  Intern unverändert sichtbar (`GalleryImage.isPrivate`, Badge), auch das interne Titelbild darf privat sein.
 - **Bilddateien nur mit Key** über `/website/galleries/:id/images/:imageId/thumb|web`; `full` gibt es für die Website **nie**.
   Es gibt keine öffentlichen oder signierten Bild-URLs – die Website lädt Bilder serverseitig und liefert sie selbst aus (bzw. cacht sie).
 - Einrichtung wie bei `events`: Benutzer*in mit `galleries.website.read` legt einen API-Key mit **nur** dem Scope
@@ -151,7 +158,7 @@ Audit: `galleries.gallery.created|updated|deleted|cover_changed|published|unpubl
 - Integration: `galleries.test.ts` (Zugriffsmatrix Owner/Freigabe/Public/view-all/edit-all/fremd 404, 422, Audit ohne Inhalte,
   Modul aus → 404), `galleries-images.test.ts` (Upload mit `tests/helpers/fake-storage.ts`, Titelbild-Fallback, Termin-Zuordnung der Galerie
   mit/ohne `events`, Sammelaktionen), `galleries-website.test.ts` (nur `public`, Felder, Varianten, Key nur mit Scope → 403 intern),
-  `events-refs.test.ts` (Dienst `EventRefsService`).
+  `events-refs.test.ts` (Dienst `EventRefsService`); „nur intern“ (PUT, Sammelaktion, Website-Detail/Liste/Titelbild/Datei, Verweis-Dienst) in `galleries-website.test.ts`.
 - E2E: `tests/e2e/galleries.spec.ts` (ohne S3: aktivieren, anlegen per Dialog, Teilen „Stamm (alle)“, bearbeiten, Filter, löschen; Upload ohne S3 → „Dateispeicher nicht eingerichtet“). Upload-Erfolg über Integrationstests (Fake-Storage) und manuell mit MinIO (API).
 
 ## Entscheidungen und offen
@@ -166,7 +173,7 @@ Audit: `galleries.gallery.created|updated|deleted|cover_changed|published|unpubl
 - **Einwilligungen (#27, 2026-10-20)**: Das System prüft die Einwilligungen der abgebildeten Personen nicht inhaltlich, verlangt aber beim
   Veröffentlichen eine **dokumentierte Bestätigung** (Dialog „Einwilligungen bestätigen“ im `GalleryDialog`, Zeitpunkt + Person gespeichert,
   Anzeige „Veröffentlichung bestätigt am … von …“ in der Detailansicht). Gelöschtes Konto → `public_confirmed_by = NULL` (Zeitpunkt bleibt).
-  **Offen:** neue Bilder in einer bereits öffentlichen Galerie werden ohne erneute Bestätigung öffentlich; kein Abgleich mit `members.consent_website`.
+  **Offen:** neue Bilder in einer bereits öffentlichen Galerie werden ohne erneute Bestätigung öffentlich (Abhilfe: einzelne Bilder „nur intern“ setzen); kein Abgleich mit `members.consent_website`.
 - Demo: `scripts/seed-demo-galleries.mjs` (braucht MinIO; Login über `DEMO_EMAIL`/`DEMO_PASSWORD`, Standard `admin@demo.test`).
 - Wie bei `events`: Wer per `edit`-Freigabe die **eigene** Freigabe entfernt, bekommt 404 und die Änderung wird zurückgenommen (Detail wird in derselben Transaktion neu geladen) – Doku von `events` sagt „darf sich selbst entfernen“, Code verhält sich wie hier. Offen.
 - Nicht geprüft: Docker-Image-Build mit sharp (Produktions-Build lokal grün, sharp bleibt extern), Upload mit echtem S3 **in der Oberfläche** (per API mit MinIO geprüft).

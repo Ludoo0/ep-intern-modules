@@ -22,6 +22,9 @@ const toRef = (r: Row): GalleryRefInfo => ({
 });
 
 const IMAGE_COUNT = sql`(SELECT count(*)::int FROM gallery_images i WHERE i.gallery_id = g.id)`;
+/** Bildanzahl für öffentliche Verweise (Website): ohne Bilder mit „nur intern“ */
+const PUBLIC_IMAGE_COUNT = sql`(SELECT count(*)::int FROM gallery_images i
+	WHERE i.gallery_id = g.id AND NOT i.is_private)`;
 
 /** Titelbild bzw. zuerst hochgeladenes Bild */
 const COVER_ID = sql`COALESCE(g.cover_image_id, (SELECT i.id FROM gallery_images i WHERE i.gallery_id = g.id
@@ -55,7 +58,7 @@ export const galleryRefsService: GalleryRefsService = {
 		const rows = await db().transaction((tx) =>
 			rowsOf(
 				tx,
-				sql`SELECT g.id, g.title, ${IMAGE_COUNT} AS image_count FROM galleries g
+				sql`SELECT g.id, g.title, ${PUBLIC_IMAGE_COUNT} AS image_count FROM galleries g
 					WHERE g.visibility = 'public' ${search ? sql`AND g.title ILIKE ${like(search)}` : sql``}
 					ORDER BY g.updated_at DESC, g.id LIMIT ${limit}`
 			)
@@ -68,7 +71,7 @@ export const galleryRefsService: GalleryRefsService = {
 		const rows = await db().transaction((tx) =>
 			rowsOf(
 				tx,
-				sql`SELECT g.id, g.title, ${IMAGE_COUNT} AS image_count FROM galleries g
+				sql`SELECT g.id, g.title, ${PUBLIC_IMAGE_COUNT} AS image_count FROM galleries g
 					WHERE g.visibility = 'public' AND g.id IN (${inList(list)})`
 			)
 		);
