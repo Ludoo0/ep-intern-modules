@@ -49,10 +49,10 @@ export const MAX_QUANTITY = 100_000;
 export const MAX_LABELS = 2000;
 export const MAX_RESERVE_CODES = 500;
 
-/** Bilder (vom Server mit `core.images` erzeugt), an Typen oder Artikeln */
+/** Bilder (vom Server mit `core.images` erzeugt), an Typen, Artikeln oder Lebensmitteln */
 export const IMAGE_VARIANTS = ['thumb', 'web'] as const;
 export type ImageVariant = (typeof IMAGE_VARIANTS)[number];
-export const IMAGE_OWNERS = ['types', 'items'] as const;
+export const IMAGE_OWNERS = ['types', 'items', 'products'] as const;
 export type ImageOwner = (typeof IMAGE_OWNERS)[number];
 export const IMAGE_CONTENT_TYPES = [
 	'image/jpeg',
@@ -63,6 +63,14 @@ export const IMAGE_CONTENT_TYPES = [
 ] as const;
 export const IMAGE_ACCEPT = IMAGE_CONTENT_TYPES.join(',');
 export const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
+/** Herkunft eines Bildes: eigener Upload oder Open Food Facts (CC BY-SA) */
+export const IMAGE_SOURCES = ['upload', 'off'] as const;
+export type ImageSource = (typeof IMAGE_SOURCES)[number];
+
+/** API-Pfad der Bilder eines Besitzers (Lebensmittel liegen unter `/pantry/products`) */
+export function imagesPath(owner: ImageOwner, ownerId: string): string {
+	return `${owner === 'products' ? '/pantry/products' : `/${owner}`}/${ownerId}/images`;
+}
 
 export function imageUrl(
 	owner: ImageOwner,
@@ -70,7 +78,7 @@ export function imageUrl(
 	imageId: string,
 	variant: ImageVariant
 ): string {
-	return `/api/v1${BASE_PATH}/${owner}/${ownerId}/images/${imageId}/${variant}`;
+	return `/api/v1${BASE_PATH}${imagesPath(owner, ownerId)}/${imageId}/${variant}`;
 }
 
 // --- Codes ---------------------------------------------------------------------
@@ -257,6 +265,7 @@ export interface ImageRef {
 	webUrl: string;
 	width: number;
 	height: number;
+	source: ImageSource;
 }
 
 // --- Lagerorte (flach) ---------------------------------------------------------
@@ -943,6 +952,8 @@ export interface FoodProduct {
 	state: ExpiryState;
 	/** Chargen mit Bestand (zuerst ablaufende zuerst) */
 	batches: FoodBatch[];
+	/** Bilder (erstes = Titelbild) */
+	images: ImageRef[];
 }
 
 export interface FoodMovement {
@@ -965,6 +976,8 @@ export interface BarcodeSuggestion {
 	name: string;
 	brand: string;
 	packageSize: string;
+	/** Open Food Facts hat ein Produktbild (Übernahme über `POST /pantry/products/:id/images/off`) */
+	hasImage: boolean;
 }
 
 /** Ergebnis eines Scans im Vorrat */

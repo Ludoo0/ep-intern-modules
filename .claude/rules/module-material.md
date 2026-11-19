@@ -2,13 +2,13 @@
 paths: ["modules/material/**", "src/lib/sdk/labels/**", "src/lib/sdk/style-presets.ts", "src/lib/server/core/pdf/labels.ts", "src/lib/components/layout/BarcodeScanner.svelte", "src/lib/components/layout/scan-input.ts", "tests/**/material*", "tests/unit/labels.test.ts", "scripts/seed-demo-material.mjs"]
 ---
 
-# Modul `material` (Materialverwaltung / Materialwart*in) – v2.2
+# Modul `material` (Materialverwaltung / Materialwart*in) – v2.3
 
 **Neu aufgebaut am 2026-10-28** (Nutzerwunsch: altes Modul mit Stücken/Kisten/Mengen, Zelt-Sets, Ausgabe/Rückgabe verworfen).
 Lager mit **Typen** und **Lagerartikeln**, Kategorien mit Icon/Farbe, flache Lagerorte, Reservieren **wie „Bestellen“ im Modul `orders`**,
 Scannen (Kamera/USB), Etiketten-Designer (erhalten), Exporte. **Seit 2026-10-28 (v2.1.0, Migr. 0005)**: Sets, Zelte als Bauplan, automatische
 Zuteilung konkreter Artikel und „Ausgegeben“. **Seit 2026-11-03 (v2.2.0, Migr. 0006)**: Verbrauchsmaterial mit Rücknahme und Verbrauch,
-Reiter **Vorrat** für Lebensmittel. Schema `mod_material`, Version 2.2.0, keine harten Abhängigkeiten, optional
+Reiter **Vorrat** für Lebensmittel. **Seit 2026-11-19 (v2.3.0, Migr. 0007)**: Bilder an Lebensmitteln (eigene + Open Food Facts). Schema `mod_material`, Version 2.3.0, keine harten Abhängigkeiten, optional
 `actions` (Zweck Aktion), `members` (Zweck Gruppe) und `offices` (Amt „Materialwart*in“). Navigation „Material“ (Icon `boxes`, `order: 45`).
 
 ## Entscheidungen des Nutzers (2026-10-28, nicht ungefragt ändern)
@@ -35,6 +35,12 @@ Reiter **Vorrat** für Lebensmittel. Schema `mod_material`, Version 2.2.0, keine
   per Scan einlagern/entnehmen (zuerst ablaufende zuerst). Unbekannte Codes → Vorschlag aus **Open Food Facts** (nur der Strichcode geht hinaus).
 - **Ablaufdatum nur bei Lebensmitteln**, mit Warnung (Liste, Dashboard, Amts-Benachrichtigung).
 
+## Entscheidungen des Nutzers (2026-11-19, v2.3)
+- Lebensmittel bekommen **Bilder**: zuerst **eigene Fotos** (wie bei Typen/Artikeln, `ImageManager`), dazu das **Produktbild aus Open Food Facts**,
+  das **lokal gespeichert** wird (Storage `products/<id>/…`, WebP-Varianten wie Uploads) – der Browser lädt nie von OFF.
+- Übernahme nur auf Wunsch: Checkbox „Produktbild von Open Food Facts übernehmen“ (Standard an) beim Anlegen aus einem Vorschlag mit Bild,
+  sonst Knopf „Bild aus Open Food Facts laden“ im Bilder-Bereich. Herkunft `images.source = off`, Hinweis „Lizenz CC BY-SA“.
+
 ## Dateien (`modules/material/`)
 | Datei | Inhalt |
 |---|---|
@@ -50,7 +56,7 @@ Reiter **Vorrat** für Lebensmittel. Schema `mod_material`, Version 2.2.0, keine
 | `db.ts` | `mdb`, `rows`, `str`, `dateStr`, Codes `nextCodes` (Zähler + Advisory-Lock `material:codes`) / `claimCode`, `likePattern`, `userNames`, Dienste `actionsService`/`membersService`/`officesService` (optional) |
 | `inventory.ts` | Laden: `loadCategories`, `loadLocations`, `loadTypes`, `loadItems` (wirksame Kategorie, Bilder, Titelbild vom Typ), `loadStock`, `loadBookings`, `imagesFor` |
 | `catalog.endpoints.ts` | `/overview`, Lagerorte, Kategorien (Icon geprüft über `loadIconSet`), `/inventory`, Typen, Artikel (Mehrfach-Anlage, Umlagern, Zustand melden, Archiv, Löschen) |
-| `images.endpoints.ts` / `files.ts` | Bilder an Typen und Artikeln (`/types/:id/images…`, `/items/:id/images…`, Pfad `<owner>/<id>/<bild>-<variante>.webp`), `removeLegacyImages` |
+| `images.endpoints.ts` / `files.ts` | Bilder an Typen, Artikeln und Lebensmitteln (`/types/:id/images…`, `/items/:id/images…` mit `inventory.manage`, `/pantry/products/:id/images…` mit `pantry.manage`; Pfad `<owner>/<id>/<bild>-<variante>.webp`), `storeImage` (gemeinsam für Upload und OFF), `POST /pantry/products/:id/images/off` (OFF-Bild übernehmen: ohne Strichcode 422, ohne Bild 404, schon übernommen 409), `removeImagesOf`, `removeLegacyImages` |
 | `reservations.service.ts` / `reservations.endpoints.ts` | Katalog (Typen mit `sets`, Zelte mit `parts`), Zweck prüfen, Liste/Detail (Zeilen verschachtelt: Zelt → Teile, je Typ-Zeile `assignments`/`missing`/`mixedSlots`, `notices`), `checkLines` (Zelte aufgelöst, `preview` → `note`), `replaceLines` (Zelt-Teile, übernimmt bisherige Zuteilung), `hand-out` (POST/DELETE), `PUT …/lines/:lineId/assignment` (angeheftet), `POST …/reassign` |
 | `codes.endpoints.ts` | `GET /codes/:code` (Artikel → Ort → reserviert), `POST /codes/reserve` |
 | `labels.endpoints.ts` | Formate (Vorgaben aus `$lib/sdk/labels` + eigene `custom:<id>`), Layouts, `POST /labels.pdf` (`labelValues` für `item`/`location`/`blank`) |
@@ -60,7 +66,7 @@ Reiter **Vorrat** für Lebensmittel. Schema `mod_material`, Version 2.2.0, keine
 | `label-logos.ts` | Logos für Etiketten (`assets/label-logos/`) |
 | `pantry.ts` (rein) | `normalizeBarcode` (EAN-8/13, UPC-A → EAN-13, GTIN-14 mit 0; Prüfziffer), `fefoOrder`, `pickBatches`, `expiryState`, `EXPIRY_WARN_DAYS` = 14 |
 | `pantry.endpoints.ts` | Vorrat: `GET /pantry` (`filter=all|stock|soon|expired`, `search`, `archived`), `GET /pantry/barcode/:code` (Produkt oder Vorschlag, OFF nur mit `pantry.manage`), Produkte CRUD (Löschen nur ohne Bestand), `check-in` (gleiches MHD + Ort → selbe Charge), `check-out` (`kind` out/discard, FEFO oder `batchId`, zu wenig → 409), `PATCH …/batches/:batchId` (Berichtigung), `loadProducts` |
-| `off.service.ts` | `lookupBarcode` (Open Food Facts v2, Timeout 4 s, 24 h Zwischenspeicher, wirft nie), `setOffFetchForTests` |
+| `off.service.ts` | `lookupBarcode` (Open Food Facts v2, Timeout 4 s, 24 h Zwischenspeicher, wirft nie; `hasImage`, die Bild-URL bleibt im Server), `fetchOffImage` (nur `https://images|static.openfoodfacts.org`, keine Weiterleitung, Timeout 8 s, `image/*`, ≤ 15 MB, wirft nie), `allowedImageUrl`, `setOffFetchForTests` |
 | `pantry-expiry.ts` | Job `pantry-expiry` (täglich): Chargen mit MHD ≤ heute + 14 und `expiry_notified_at IS NULL` → **eine** Sammel-Benachrichtigung (`notifyFoodExpiring`), danach markiert; ohne `offices` bleibt offen |
 | `pages/` | `MaterialPage`, `ScanRedirectPage`, `pantry/` (`PantryTab`, `PantryScanDialog` – Menge/MHD nach dem Scan, „Speichern & weiter“ öffnet den Scanner wieder, `ProductDialog`, `ProductDetailDialog` – Chargen, Entnehmen/Entsorgen/Berichtigen, Verlauf), `reservations/ReturnDialog`, `inventory/ConsumableFields`, `reserve/` (Katalog inkl. Zelte/ganze Sets, Warenkorb mit Zuteilungs-Hinweis), `reservations/` (Listen, Detail mit Zuteilung/Ausgabe, `AssignmentDialog`, Export), `inventory/` (Ansichten Artikel · Sets · Zelte: Lagertabelle, `SetsView`/`SetDialog`, `TentsView`/`TentDialog`, Dialoge), `labels/` (Kacheln, Designer), `shared/` (`ScanButton`, `scan.ts`, `CategoryGlyph`, `ImageManager`, `ItemPicker` mit `seed`, `PrintLabelsDialog`, Vorschauen), `widgets/`, `helpers.ts` |
 
@@ -77,6 +83,8 @@ Migration 0006: `types.consumable|unit`, `items.consumable|unit` (bei Artikeln m
 `items_quantity_check` ≥ 0 (0 nur bei Verbrauchsmaterial, Server prüft), `reservations.returned_at|by`, `consumptions` (Verlauf, `reservation_id`/`item_id`
 SET NULL + Titel/Name/Einheit als Kopie), `food_products` (`barcode` UNIQUE, nur Ziffern), `food_batches` (`best_before`, `expiry_notified_at`),
 `food_movements` (`kind` in|out|discard|correct).
+Migration 0007: `images.product_id` (FK `food_products` CASCADE), `images.source` upload|off, `images_owner_check` = genau einer von Typ/Artikel/Lebensmittel.
+Produkt löschen → `removeImagesOf('products')` (Dateien), Reset `pantry` mit `storagePrefixes: ['products/']`.
 
 ## Regeln
 - **Verfügbarkeit**: je Tag Artikel I frei = nutzbare Anzahl − Artikel-Zeilen(I); Typ T frei = Σ nutzbare Anzahl seiner Artikel − Artikel-Zeilen
@@ -128,13 +136,13 @@ SET NULL + Titel/Name/Einheit als Kopie), `food_products` (`barcode` UNIQUE, nur
 Unit `tests/unit/material-availability.test.ts`, `material-allocation.test.ts` (Zuteilung, Planer, Zelte), `material-cart.test.ts`,
 `material-label-designer.test.ts`, `labels.test.ts`; Integration `tests/integration/material.test.ts`, `material-sets.test.ts` (Sets, Zelte, Umplanen,
 Ausgabe, Anheften), `material-consumables-pantry.test.ts` (Rücknahme mit Verbrauch, Belegung bis zur Rücknahme, Vorrat, OFF mit Fake-Fetch,
-Ablauf-Hinweis über das Amt), Unit `material-pantry.test.ts`, Upgrade `material-migrations.test.ts` (0002, 0004, 0005); E2E `tests/e2e/material.spec.ts`. Demo `node scripts/seed-demo-material.mjs`
+Ablauf-Hinweis über das Amt, Lebensmittel-Bilder mit Fake-Storage, OFF-Bild-Import inkl. fremdem Host/zu groß), Unit `material-pantry.test.ts`, Upgrade `material-migrations.test.ts` (0002, 0004, 0005, 0007); E2E `tests/e2e/material.spec.ts`. Demo `node scripts/seed-demo-material.mjs`
 (Sets K1/K2/KJ1/KJ2, Zelte Kohte/Jurte).
 
 ## Offen
 - Echte Handy-Kamera (iOS) und Etikettendrucker nur nach Deploy mit HTTPS prüfbar.
 - Keine Rückgabe per Scan und keine Historie je Artikel (außer Verbräuchen); Rücknahme ohne Verbrauchsmaterial ist nur eine Markierung.
 - Vorrat: Kamera liest EAN-13 (Core `BarcodeScanner`), **nicht EAN-8/UPC-E** (bräuchte Core-Änderung) – USB-Scanner/Eingabe gehen immer.
-  Mengen ganzzahlig, keine Mindestbestände, keine Bilder aus Open Food Facts. E2E für Vorrat/Rücknahme fehlt.
+  Mengen ganzzahlig, keine Mindestbestände. E2E für Vorrat/Rücknahme/Lebensmittel-Bilder fehlt.
 - Zuteilung ist Greedy nach Beginn (optimal ohne feste Zuteilungen); mit vielen angehefteten Bahnen kann sie Fehlmengen melden, obwohl eine
   andere Verteilung ginge. Zelte haben keine eigenen Bilder (Bild des ersten Teils). E2E für Sets/Zelte fehlt noch.

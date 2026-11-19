@@ -37,6 +37,12 @@ export function categoryRef(r: Row, prefix = 'c_'): CategoryRef | null {
 	};
 }
 
+const IMAGE_COLUMN: Record<ImageOwner, SQL> = {
+	types: sql`type_id`,
+	items: sql`item_id`,
+	products: sql`product_id`
+};
+
 /** Bilder je Besitzer (Reihenfolge = Position) */
 export async function imagesFor(
 	tx: Tx,
@@ -45,10 +51,10 @@ export async function imagesFor(
 ): Promise<Map<string, ImageRef[]>> {
 	const map = new Map<string, ImageRef[]>();
 	if (!ids.length) return map;
-	const column = owner === 'types' ? sql`type_id` : sql`item_id`;
+	const column = IMAGE_COLUMN[owner];
 	const list = await rows(
 		tx,
-		sql`SELECT id, ${column} AS owner_id, width, height FROM images
+		sql`SELECT id, ${column} AS owner_id, width, height, source FROM images
 			WHERE ${column} IN (${idList(ids)}) ORDER BY position, created_at, id`
 	);
 	for (const r of list) {
@@ -60,7 +66,8 @@ export async function imagesFor(
 			width: num(r.width),
 			height: num(r.height),
 			thumbUrl: imageUrl(owner, ownerId, id, 'thumb'),
-			webUrl: imageUrl(owner, ownerId, id, 'web')
+			webUrl: imageUrl(owner, ownerId, id, 'web'),
+			source: r.source === 'off' ? 'off' : 'upload'
 		});
 		map.set(ownerId, arr);
 	}

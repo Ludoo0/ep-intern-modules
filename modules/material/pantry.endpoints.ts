@@ -6,6 +6,8 @@ import { sql, type SQL } from 'drizzle-orm';
 import { core, defineEndpoint, errors, type AnyApiEndpoint, type Tx } from '$lib/sdk/server';
 import { formatDateDe } from '$lib/sdk/dates';
 import { dateStr, idList, iso, likePattern, mdb, num, rows, str, today, userNames } from './db';
+import { removeImagesOf } from './images.endpoints';
+import { imagesFor } from './inventory';
 import { lookupBarcode } from './off.service';
 import { expiryState, fefoOrder, normalizeBarcode, pickBatches } from './pantry';
 import {
@@ -44,6 +46,11 @@ export async function loadProducts(tx: Tx, where: SQL = sql`TRUE`): Promise<Food
 			FROM food_batches b LEFT JOIN locations l ON l.id = b.location_id
 			WHERE b.quantity > 0 AND b.product_id IN (${idList(list.map((r) => String(r.id)))})`
 	);
+	const images = await imagesFor(
+		tx,
+		'products',
+		list.map((r) => String(r.id))
+	);
 	const t = today();
 	const byProduct = new Map<string, FoodBatch[]>();
 	for (const b of batches) {
@@ -77,7 +84,8 @@ export async function loadProducts(tx: Tx, where: SQL = sql`TRUE`): Promise<Food
 			quantity: own.reduce((n, b) => n + b.quantity, 0),
 			nextBestBefore: next,
 			state: expiryState(next, t),
-			batches: own
+			batches: own,
+			images: images.get(String(r.id)) ?? []
 		};
 	});
 }
@@ -293,7 +301,17 @@ export const pantryEndpoints: AnyApiEndpoint[] = [
 				if (p.quantity > 0) {
 					throw errors.conflict('Das Produkt hat noch Bestand – erst entnehmen oder archivieren');
 				}
-				await tx.execute(sql`DELETE FROM food_products WHERE id = ${params.id}`);
+			});
+			// Bilder samt Dateien zuerst (Storage außerhalb der Transaktion), dann das Produkt
+			await removeImagesOf('products', params.id);
+			await mdb().transaction(async (tx) => {
+				const [r] = await rows(
+					tx,
+					sql`DELETE FROM food_products WHERE id = ${params.id} AND NOT EXISTS (
+						SELECT 1 FROM food_batches b WHERE b.product_id = ${params.id} AND b.quantity > 0)
+						RETURNING id`
+				);
+				if (!r) throw errors.conflict('Das Produkt hat inzwischen Bestand – bitte archivieren');
 			});
 			await core.audit.logFromContext(ctx, 'material.pantry.product-deleted', {
 				target: params.id

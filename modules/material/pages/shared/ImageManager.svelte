@@ -10,12 +10,14 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { ConfirmDialog } from '$lib/components/layout';
+	import type { Snippet } from 'svelte';
 	import { cn } from '$lib/utils';
 	import {
 		IMAGE_ACCEPT,
 		IMAGE_CONTENT_TYPES,
 		MAX_IMAGE_BYTES,
 		MAX_IMAGES,
+		imagesPath,
 		type ImageOwner,
 		type ImageRef
 	} from '../../schemas';
@@ -37,14 +39,17 @@
 		owner,
 		id,
 		images,
-		onchange
+		onchange,
+		extra
 	}: {
-		/** Besitzer der Bilder: Typ oder Lagerartikel */
+		/** Besitzer der Bilder: Typ, Lagerartikel oder Lebensmittel */
 		owner: ImageOwner;
 		id: string;
 		images: ImageRef[];
 		/** Neue Bildliste (nach Upload, Löschen, Sortieren) */
 		onchange: (images: ImageRef[]) => void;
+		/** Zusätzliche Knöpfe unter der Ablage (z. B. „Bild aus Open Food Facts laden“) */
+		extra?: Snippet;
 	} = $props();
 
 	let input = $state<HTMLInputElement | null>(null);
@@ -54,7 +59,7 @@
 	let storageMissing = $state(false);
 	let busy = $state(false);
 
-	const base = $derived(`${BASE}/${owner}/${id}/images`);
+	const base = $derived(`${BASE}${imagesPath(owner, id)}`);
 	const full = $derived(images.length >= MAX_IMAGES);
 	const mb = Math.round(MAX_IMAGE_BYTES / 1024 / 1024);
 
@@ -216,6 +221,8 @@
 		/>
 	</div>
 
+	{@render extra?.()}
+
 	{#if images.length}
 		<ul class="grid grid-cols-2 gap-3 sm:grid-cols-3">
 			{#each images as img, i (img.id)}
@@ -229,6 +236,9 @@
 						/>
 						{#if i === 0}
 							<Badge class="absolute top-2 left-2">Titelbild</Badge>
+						{/if}
+						{#if img.source === 'off'}
+							<Badge variant="secondary" class="absolute right-2 bottom-2">Open Food Facts</Badge>
 						{/if}
 					</div>
 					<div class="flex items-center justify-between gap-1 p-1.5">
@@ -271,6 +281,9 @@
 		</ul>
 		<p class="text-xs text-muted-foreground">
 			Das erste Bild ist das Titelbild. Mit den Pfeilen änderst du die Reihenfolge.
+			{#if images.some((i) => i.source === 'off')}
+				Bilder von Open Food Facts stehen unter der Lizenz CC BY-SA.
+			{/if}
 		</p>
 	{:else if !uploading}
 		<p class="text-sm text-muted-foreground">Noch keine Bilder.</p>

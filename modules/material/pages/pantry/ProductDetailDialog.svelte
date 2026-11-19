@@ -235,6 +235,32 @@
 			<ErrorState message={error} onretry={load} compact />
 		{:else if p}
 			<div class="grid gap-5">
+				{#if p.images.length}
+					<figure class="grid gap-1">
+						<div class="flex gap-2 overflow-x-auto">
+							{#each p.images as img, i (img.id)}
+								<a
+									href={img.webUrl}
+									target="_blank"
+									rel="noopener"
+									class="shrink-0 overflow-hidden rounded-lg border bg-muted"
+								>
+									<img
+										src={i === 0 ? img.webUrl : img.thumbUrl}
+										alt={i === 0 ? p.name : `${p.name}, Bild ${i + 1}`}
+										loading="lazy"
+										class={i === 0 ? 'h-40 w-auto object-contain' : 'size-20 object-cover'}
+									/>
+								</a>
+							{/each}
+						</div>
+						{#if p.images.some((img) => img.source === 'off')}
+							<figcaption class="text-xs text-muted-foreground">
+								Bild: Open Food Facts, Lizenz CC BY-SA
+							</figcaption>
+						{/if}
+					</figure>
+				{/if}
 				<dl class="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
 					<div>
 						<dt class="text-xs text-muted-foreground">Bestand</dt>

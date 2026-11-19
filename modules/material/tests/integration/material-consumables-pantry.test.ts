@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
+import sharp from 'sharp';
 import { useTestDatabase } from '$testing';
+import { fakeFileRows, installFakeStorage, uninstallFakeStorage } from '$testing';
 import { contextForUser } from '$testing';
 import { bootstrapAdmin, createUser } from '$testing';
 import { createRole } from '$testing';
@@ -26,6 +28,7 @@ import type {
 	Catalog,
 	CodeTarget,
 	FoodProduct,
+	ImageRef,
 	Item,
 	ItemDetail,
 	MaterialType,
@@ -44,6 +47,15 @@ let admin: RequestContext;
 const keys: Record<string, string> = {};
 const sent: { to: string; subject: string; text: string }[] = [];
 let offCalls: string[] = [];
+let jpeg: Buffer;
+const OFF_IMAGE = 'https://images.openfoodfacts.org/images/products/400/638/133/3931/front_de.jpg';
+/** OFF kennt das Produkt, Bild liegt aber auf einem fremden Host → wird nicht geladen */
+const EVIL = '4000000000013';
+/** OFF kennt das Produkt ohne Bild */
+const NO_IMAGE = '4000000000020';
+/** OFF liefert ein zu großes „Bild“ */
+const HUGE = '4000000000037';
+const NUDELN_CODE = '4006381333931';
 
 function api(path: string, init: RequestInit & { token?: string; json?: unknown } = {}) {
 	resetAllForTests();
@@ -102,21 +114,46 @@ beforeAll(async () => {
 			sent.push({ to: m.to, subject: m.subject, text: m.text });
 		}
 	});
+	jpeg = await sharp({ create: { width: 120, height: 90, channels: 3, background: '#c33' } })
+		.jpeg()
+		.toBuffer();
+	const product = (p: Record<string, unknown>) =>
+		new Response(JSON.stringify({ status: 1, product: p }), {
+			status: 200,
+			headers: { 'content-type': 'application/json' }
+		});
 	setOffFetchForTests(async (input) => {
 		const url = String(input);
 		offCalls.push(url);
-		if (url.includes('4006381333931')) {
-			return new Response(
-				JSON.stringify({
-					status: 1,
-					product: {
-						product_name_de: 'Spaghetti No. 5',
-						brands: 'Nudelwerk, Andere',
-						quantity: '500 g'
-					}
-				}),
-				{ status: 200, headers: { 'content-type': 'application/json' } }
-			);
+		if (url === OFF_IMAGE) {
+			return new Response(new Uint8Array(jpeg), {
+				status: 200,
+				headers: { 'content-type': 'image/jpeg' }
+			});
+		}
+		if (url === 'https://images.openfoodfacts.org/huge.jpg') {
+			return new Response(new Uint8Array(16 * 1024 * 1024), {
+				status: 200,
+				headers: { 'content-type': 'image/jpeg' }
+			});
+		}
+		if (url.includes(NUDELN_CODE)) {
+			return product({
+				product_name_de: 'Spaghetti No. 5',
+				brands: 'Nudelwerk, Andere',
+				quantity: '500 g',
+				image_front_url: OFF_IMAGE
+			});
+		}
+		if (url.includes(EVIL)) {
+			return product({ product_name: 'Böse', image_front_url: 'https://evil.example/x.jpg' });
+		}
+		if (url.includes(NO_IMAGE)) return product({ product_name: 'Ohne Bild' });
+		if (url.includes(HUGE)) {
+			return product({
+				product_name: 'Riesig',
+				image_front_url: 'https://images.openfoodfacts.org/huge.jpg'
+			});
 		}
 		return new Response(JSON.stringify({ status: 0 }), { status: 200 });
 	});
@@ -131,6 +168,7 @@ beforeAll(async () => {
 	await enableModule(admin, 'material');
 	await enableModule(admin, 'offices');
 	admin = await ctxOf(u!.id);
+	await installFakeStorage(admin);
 	keys.admin = (await createApiKey(admin, { name: 'a', scopes: [...admin.permissions] })).key;
 	await mkUser('leitung', [
 		'core.api.manage',
@@ -161,6 +199,7 @@ afterAll(async () => {
 	setTodayForTests(null);
 	setMailTransportForTests(undefined);
 	setOffFetchForTests(undefined);
+	uninstallFakeStorage();
 	await close();
 });
 
@@ -301,7 +340,7 @@ describe('Verbrauchsmaterial', () => {
 });
 
 describe('Vorrat', () => {
-	const NUDELN = '4006381333931';
+	const NUDELN = NUDELN_CODE;
 	let nudeln: FoodProduct;
 
 	it('unbekannter Strichcode: Vorschlag aus Open Food Facts nur mit Vorratsrecht', async () => {
@@ -315,8 +354,11 @@ describe('Vorrat', () => {
 			found: true,
 			name: 'Spaghetti No. 5',
 			brand: 'Nudelwerk',
-			packageSize: '500 g'
+			packageSize: '500 g',
+			hasImage: true
 		});
+		// Die Bild-URL selbst geht nie an den Client
+		expect(JSON.stringify(r)).not.toContain('openfoodfacts');
 		expect(offCalls).toHaveLength(1);
 		// Zwischenspeicher: kein zweiter Abruf
 		await data(await get(`/pantry/barcode/${NUDELN}`, 'koch'));
@@ -467,5 +509,98 @@ describe('Vorrat', () => {
 		sent.length = 0;
 		await runJobNow(admin, 'material.pantry-expiry');
 		expect(sent.filter((m) => m.to === ADMIN_MAIL)).toHaveLength(0);
+	});
+});
+
+describe('Vorrat: Bilder', () => {
+	let p: FoodProduct;
+	const upload = (id: string, who: string) => {
+		const form = new FormData();
+		form.append('file', new File([new Uint8Array(jpeg)], 'foto.jpg', { type: 'image/jpeg' }));
+		return M(`/pantry/products/${id}/images`, who, { method: 'POST', body: form });
+	};
+	const imageRows = async (id: string) =>
+		(
+			await moduleDb('material').transaction((tx) =>
+				tx.execute(sql`SELECT source, thumb_path, web_path FROM images WHERE product_id = ${id}`)
+			)
+		).rows as { source: string; thumb_path: string; web_path: string }[];
+
+	it('eigene Bilder hochladen, sortieren, löschen; Rechte', async () => {
+		p = await data<FoodProduct>(
+			await post('/pantry/products', 'koch', { name: 'Haferflocken' }),
+			201
+		);
+		expect(p.images).toEqual([]);
+		await fail(await upload(p.id, 'leitung'), 403);
+		const a = await data<ImageRef>(await upload(p.id, 'koch'), 201);
+		const b = await data<ImageRef>(await upload(p.id, 'koch'), 201);
+		expect(a).toMatchObject({ source: 'upload', width: 120, height: 90 });
+		expect(a.thumbUrl).toBe(
+			`/api/v1/modules/material/pantry/products/${p.id}/images/${a.id}/thumb`
+		);
+		// Abrufen mit Leserecht
+		const img = await get(a.thumbUrl.replace('/api/v1/modules/material', ''), 'leitung');
+		expect(img.status).toBe(200);
+		expect(img.headers.get('content-type')).toBe('image/webp');
+		const reorder = (who: string) =>
+			M(`/pantry/products/${p.id}/images/order`, who, {
+				method: 'PUT',
+				json: { ids: [b.id, a.id] }
+			});
+		await fail(await reorder('leitung'), 403);
+		const order = await data<ImageRef[]>(await reorder('koch'));
+		expect(order.map((i) => i.id)).toEqual([b.id, a.id]);
+		const [listed] = await data<FoodProduct[]>(await get('/pantry?search=Haferflocken', 'leitung'));
+		expect(listed!.images.map((i) => i.id)).toEqual([b.id, a.id]);
+		await data(await del(`/pantry/products/${p.id}/images/${a.id}`, 'koch'));
+		expect(await imageRows(p.id)).toHaveLength(1);
+	});
+
+	it('Bild aus Open Food Facts lokal übernehmen', async () => {
+		// ohne Strichcode
+		await fail(await post(`/pantry/products/${p.id}/images/off`, 'koch'), 422);
+		const [nudeln] = await data<FoodProduct[]>(await get(`/pantry?search=${NUDELN_CODE}`, 'koch'));
+		await fail(await post(`/pantry/products/${nudeln!.id}/images/off`, 'leitung'), 403);
+		offCalls = [];
+		const img = await data<ImageRef>(
+			await post(`/pantry/products/${nudeln!.id}/images/off`, 'koch'),
+			201
+		);
+		expect(img).toMatchObject({ source: 'off', width: 120, height: 90 });
+		expect(offCalls).toContain(OFF_IMAGE);
+		const [row] = await imageRows(nudeln!.id);
+		expect(row!.source).toBe('off');
+		// lokal gespeichert (WebP-Varianten im Modul-Storage)
+		const stored = [...fakeFileRows.values()].filter((r) =>
+			r.path.startsWith(`products/${nudeln!.id}/`)
+		);
+		expect(stored).toHaveLength(2);
+		// zweiter Import → 409
+		await fail(await post(`/pantry/products/${nudeln!.id}/images/off`, 'koch'), 409);
+	});
+
+	it('fremder Bild-Host, kein Bild, zu groß → nichts gespeichert', async () => {
+		for (const barcode of [EVIL, NO_IMAGE, HUGE]) {
+			const prod = await data<FoodProduct>(
+				await post('/pantry/products', 'koch', { name: `P ${barcode}`, barcode }),
+				201
+			);
+			offCalls = [];
+			await fail(await post(`/pantry/products/${prod.id}/images/off`, 'koch'), 404);
+			expect(offCalls.some((u) => u.includes('evil.example'))).toBe(false);
+			expect(await imageRows(prod.id)).toHaveLength(0);
+		}
+	});
+
+	it('Produkt löschen entfernt Bilder samt Dateien', async () => {
+		const paths = (await imageRows(p.id)).flatMap((r) => [r.thumb_path, r.web_path]);
+		expect(paths).toHaveLength(2);
+		await data(await del(`/pantry/products/${p.id}`, 'koch'));
+		expect(await imageRows(p.id)).toHaveLength(0);
+		const left = [...fakeFileRows.values()].filter(
+			(r) => paths.includes(r.path) && r.status === 'ready'
+		);
+		expect(left).toHaveLength(0);
 	});
 });

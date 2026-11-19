@@ -4,6 +4,7 @@
 	import { onMount, untrack } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import Plus from '@lucide/svelte/icons/plus';
+	import Wheat from '@lucide/svelte/icons/wheat';
 	import X from '@lucide/svelte/icons/x';
 	import { apiFetch } from '$lib/sdk/client';
 	import { Badge } from '$lib/components/ui/badge';
@@ -120,7 +121,7 @@
 	let formProduct = $state<FoodProduct | null>(null);
 	let formPreset = $state<ProductPreset>({});
 	/** Nach dem Anlegen aus einem Scan direkt einlagern */
-	let afterCreateScan = false;
+	let afterCreateScan = $state(false);
 	let scanProduct = $state<FoodProduct | null>(null);
 	let scanDialogOpen = $state(false);
 	let scannerOpen = $state(false);
@@ -193,7 +194,8 @@
 						name: s?.name,
 						brand: s?.brand,
 						packageSize: s?.packageSize,
-						suggested: !!s?.found
+						suggested: !!s?.found,
+						hasImage: !!s?.hasImage
 					},
 					true
 				);
@@ -243,6 +245,19 @@
 			</Button>
 		</div>
 	{/if}
+{/snippet}
+
+{#snippet thumb(p: FoodProduct)}
+	<div
+		class="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted"
+		aria-hidden="true"
+	>
+		{#if p.images[0]}
+			<img src={p.images[0].thumbUrl} alt="" loading="lazy" class="size-full object-cover" />
+		{:else}
+			<Wheat class="size-4 text-muted-foreground" />
+		{/if}
+	</div>
 {/snippet}
 
 {#snippet expiryBadge(p: FoodProduct)}
@@ -360,6 +375,7 @@
 						amountClass={p.quantity ? undefined : 'text-muted-foreground'}
 						onclick={() => openDetail(p.id)}
 					>
+						{#snippet leading()}{@render thumb(p)}{/snippet}
 						{#snippet trailing()}{@render expiryBadge(p)}{/snippet}
 					</ListRow>
 				</div>
@@ -391,10 +407,15 @@
 							}}
 						>
 							<Table.Cell>
-								<div class="font-medium">{p.name}</div>
-								<div class="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-									{[p.brand, p.packageSize].filter(Boolean).join(' · ')}
-									{@render expiryBadge(p)}
+								<div class="flex items-center gap-3">
+									{@render thumb(p)}
+									<div class="min-w-0">
+										<div class="font-medium">{p.name}</div>
+										<div class="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+											{[p.brand, p.packageSize].filter(Boolean).join(' · ')}
+											{@render expiryBadge(p)}
+										</div>
+									</div>
 								</div>
 							</Table.Cell>
 							<Table.Cell
@@ -423,6 +444,7 @@
 	product={formProduct}
 	preset={formPreset}
 	{locations}
+	continueLabel={afterCreateScan ? 'Weiter zum Einlagern' : 'Fertig'}
 	onsaved={(p) => {
 		if (formProduct) replaceProduct(p);
 		else void load();

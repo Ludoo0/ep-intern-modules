@@ -13,7 +13,9 @@ export const resetAreas: ResetArea[] = [
 		id: 'pantry',
 		label: 'Vorrat (Lebensmittel)',
 		description: 'Löscht alle Lebensmittel-Produkte, Chargen und Buchungen.',
-		tables: ['food_movements', 'food_batches', 'food_products']
+		// Bildzeilen gehen per CASCADE mit, die Dateien über das Präfix
+		tables: ['food_movements', 'food_batches', 'food_products'],
+		storagePrefixes: ['products/']
 	},
 	{
 		id: 'all',

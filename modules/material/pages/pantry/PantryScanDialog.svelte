@@ -89,7 +89,16 @@
 <Dialog.Root bind:open>
 	<Dialog.Content class="sm:max-w-md">
 		<Dialog.Header>
-			<Dialog.Title>{product.name}</Dialog.Title>
+			<Dialog.Title class="flex items-center gap-3">
+				{#if product.images[0]}
+					<img
+						src={product.images[0].thumbUrl}
+						alt=""
+						class="size-10 shrink-0 rounded-md bg-muted object-cover"
+					/>
+				{/if}
+				{product.name}
+			</Dialog.Title>
 			<Dialog.Description>
 				{[product.brand, product.packageSize].filter(Boolean).join(' · ') || 'Lebensmittel'} · Bestand
 				{formatAmount(product.quantity, product.unit)}

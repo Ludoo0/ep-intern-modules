@@ -187,3 +187,60 @@ describe('material 0005_sets_tents', () => {
 		).rejects.toThrow();
 	});
 });
+
+describe('material 0007_food_images', () => {
+	it('behält bestehende Bilder (Herkunft upload) und erlaubt genau einen Besitzer', async () => {
+		await migrateModuleTo('material', '0006_consumables_pantry');
+		await moduleSql(
+			'material',
+			sql`INSERT INTO images (id, type_id, thumb_path, web_path) VALUES
+				('00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c1', 't', 'w')`
+		);
+		await moduleSql(
+			'material',
+			sql`INSERT INTO food_products (id, name) VALUES ('00000000-0000-4000-8000-0000000000d2', 'Nudeln')`
+		);
+
+		expect(await migrateModuleTo('material', '0007_food_images')).toEqual(['0007_food_images']);
+
+		expect(await moduleSql('material', sql`SELECT source, product_id FROM images`)).toEqual([
+			{ source: 'upload', product_id: null }
+		]);
+		await moduleSql(
+			'material',
+			sql`INSERT INTO images (id, product_id, thumb_path, web_path, source) VALUES
+				('00000000-0000-4000-8000-0000000000d3', '00000000-0000-4000-8000-0000000000d2', 't', 'w', 'off')`
+		);
+		// zwei Besitzer, kein Besitzer, unbekannte Herkunft → abgelehnt
+		await expect(
+			moduleSql(
+				'material',
+				sql`INSERT INTO images (id, type_id, product_id, thumb_path, web_path) VALUES
+					('00000000-0000-4000-8000-0000000000d4', '00000000-0000-4000-8000-0000000000c1',
+						'00000000-0000-4000-8000-0000000000d2', 't', 'w')`
+			)
+		).rejects.toThrow();
+		await expect(
+			moduleSql(
+				'material',
+				sql`INSERT INTO images (id, thumb_path, web_path) VALUES
+					('00000000-0000-4000-8000-0000000000d5', 't', 'w')`
+			)
+		).rejects.toThrow();
+		await expect(
+			moduleSql(
+				'material',
+				sql`INSERT INTO images (id, product_id, thumb_path, web_path, source) VALUES
+					('00000000-0000-4000-8000-0000000000d6', '00000000-0000-4000-8000-0000000000d2', 't', 'w', 'x')`
+			)
+		).rejects.toThrow();
+		// Lebensmittel löschen nimmt seine Bildzeilen mit
+		await moduleSql(
+			'material',
+			sql`DELETE FROM food_products WHERE id = '00000000-0000-4000-8000-0000000000d2'`
+		);
+		expect(await moduleSql('material', sql`SELECT count(*)::int AS n FROM images`)).toEqual([
+			{ n: 1 }
+		]);
+	});
+});
