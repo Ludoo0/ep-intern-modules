@@ -68,7 +68,7 @@ async function searchGroups(tx: Tx, p: string, limit: number): Promise<SearchHit
 			id: `group:${String(r.id)}`,
 			title: String(r.name),
 			subtitle: [type, `${n} ${n === 1 ? 'Mitglied' : 'Mitglieder'}`].filter(Boolean).join(' · '),
-			href: `/modules/members/groups?open=${encodeURIComponent(String(r.id))}`,
+			href: `/modules/members/groups/${encodeURIComponent(String(r.id))}`,
 			icon: 'folder',
 			type: 'Gruppe'
 		};

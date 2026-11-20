@@ -5,7 +5,7 @@ paths: ["modules/members/**", "tests/**/members*"]
 # Modul `members` (Mitglieder & Gruppen)
 
 Stammdaten des Stammes: Mitglieder (Kontakte, Stand, Gruppen, Einwilligungen, Dokumente) und Gruppen
-(Sippen/Meuten mit Leitern, Treffen, Farbe, Bild). Schema `mod_members`, Version 1.13.0, keine Abhängigkeiten.
+(Sippen/Meuten mit Leitern, Treffen, Farbe, Bild). Schema `mod_members`, Version 1.15.0, keine Abhängigkeiten.
 Abnehmer des Dienstes `MembersService` (`contract.ts`): `actions` (verknüpfte Mitglieder, Zusatzfelder) und `treasury`
 (`listMemberContacts`: Zahler, Mails, Mitgliedschaft/Beitragsebenen).
 
@@ -13,7 +13,7 @@ Abnehmer des Dienstes `MembersService` (`contract.ts`): `actions` (verknüpfte M
 | Datei | Inhalt |
 |---|---|
 | `module.ts` | Manifest (Rechte, Navigation Mitglieder/Gruppen im Hauptmenü, Zusatzfelder/Löschfristen mit `admin: true` in der Administration, Einstellungen `members.address.*`), Migrationen, `provides` (`membersService` + `listMemberSheets` + `principalsService`), `search`, `backup` (`membersBackup`), `resetAreas`/`resetUsers`, `onUserDeleted`, `subjectExport`; Endpoints (Reihenfolge website → sheets → members → address → fields → link → groups → group-image → documents → retention) |
-| `ui.ts` | Routen `''` → `MembersPage`, `groups` → `GroupsPage`, `fields` → `FieldsPage`, `retention` → `RetentionPage`; öffentlich `verknuepfen/:token` → `LinkAccount`; `profileSections`, Dashboard-Kachel (`pages/widgets/MyMembersWidget.svelte`) |
+| `ui.ts` | Routen `''` → `MembersPage`, `groups` → `GroupsPage`, `groups/:id` → `GroupDetailPage`, `fields` → `FieldsPage`, `retention` → `RetentionPage`; öffentlich `verknuepfen/:token` → `LinkAccount`; `profileSections`, Dashboard-Kachel (`pages/widgets/MyMembersWidget.svelte`) |
 | `contract.ts` | Vertrag `MembersService` für abhängige Module (`core.modules.use('members', …)`) |
 | `principals.service.ts` | `principalsService` (Vertrag `PrincipalProvider`): `listGroups`, `principalIdsForUser`, `searchMembers` (ohne Rechteprüfung, Aufrufer prüft), `searchMemberPrincipals` (Freigabe-Suche, prüft selbst `members.member.view`) |
 | `fields.service.ts` / `fields.endpoints.ts` | Zusatzfelder: `loadFieldDefs`/`listFieldDefs`/`putFieldDefs`, `validateCustomValues`, `mergeCustom`, `loadMailOptOut`, Dienst `membersService`; `GET /fields` (`members.member.view`), `PUT /fields` (`members.field.manage`, Vorlagen bleiben) |
@@ -34,7 +34,8 @@ Abnehmer des Dienstes `MembersService` (`contract.ts`): `actions` (verknüpfte M
 | `documents.endpoints.ts` | Datenschutz-/Anmeldedokument je Mitglied (multipart) |
 | `group-image.endpoints.ts` | Gruppenbild (multipart) |
 | `group-image.service.ts` | `processGroupImage` (`core.images.process`, WebP ≤ 1600 px, Metadaten weg, Inhalt muss zum Typ passen), `processedGroupImagePath`/`isProcessedGroupImagePath`, Job `reprocessGroupImages` |
-| `pages/MembersPage.svelte`, `MemberForm.svelte` (Tabs, auch Ansicht), `GroupsPage.svelte` | UI |
+| `pages/MembersPage.svelte`, `MemberForm.svelte` (Tabs, auch Ansicht), `GroupsPage.svelte` (Kachel-Raster), `GroupDetailPage.svelte` (Gruppenseite) | UI |
+| `pages/GroupDialog.svelte` / `GroupSheetsDialog.svelte` / `group-actions.ts` | Anlegen/Bearbeiten-Dialog (`group`, `initialTab`, `onsaved`; lädt Mitglieder für die Leitungsauswahl selbst), Mitgliederliste-PDF (Spaltenauswahl), gemeinsame Helfer (`groupHref`, `memberHref`, `composeFor`, `leaderNames`, `meetingText`, `imageUrl`) |
 | `pages/` (weitere) | `FieldsPage` (Zusatzfelder, `FormBuilder`), `BulkDialog`, `LinksDialog`, öffentlich `LinkAccount`, `AddressFields` (+`countries.ts`), Profil `ProfileMembers`/`ProfileMemberCard`/`ProfileMailPrefs` (+`profile-shared.ts`), `download.ts`, Kachel `widgets/MyMembersWidget` |
 | `retention.service.ts`, `retention.endpoints.ts`, `pages/RetentionPage.svelte` | Löschfrist nach Austritt: Vorschlagsliste, Sammel-Anonymisieren (#30) |
 | `subject-export.ts` | Beitrag zur Datenauskunft (`subjectExport`: `findSubjects`, `resolve`, `run`) |
@@ -138,6 +139,7 @@ Kein Objekt-Besitz: Zugriff gilt global je Recht (keine Freigaben/Matrix) – Au
 | GET `/groups`, `/groups/:id` | group.view | inkl. Leiter und `memberCount` |
 | POST `/groups`, PUT `/groups/:id` | group.edit | ≥ 1 Leitung (Mitglied oder Konto, 422 `leaderIds`); Name case-insensitiv eindeutig (409) |
 | GET `/groups/leader-users?search=` | group.edit | aktive Konten für die Leitungsauswahl (ab 2 Zeichen, ≤ 30) |
+| GET `/groups/:id/overview` | group.view | Gruppenseite: `GroupOverview { today, nextMeeting, birthdays }` (Geburtstage der nächsten 14 Tage **nur mit `members.member.view`**, sonst `[]`); Logik `groupSummaries` in `dashboard.ts` (auch für `/led/overview`); 60/min; 404 unbekannt |
 | DELETE `/groups/:id` | group.delete | 409, solange Mitglieder zugeordnet |
 | POST `/members/bulk` | member.edit (`delete`: zusätzlich member.delete) | Body `{ action: add-groups\|remove-groups\|set-stage\|set-consent\|delete, ids (1–2000 = `BULK_MAX_IDS`), … }`; Antwort `{ affected, skipped[{id,name,reason}] }`; unbekannte ID → 404 (nichts geändert); `remove-groups` lässt ≥ 1 Gruppe übrig, `delete` überspringt einzige Leiter (409-Grund); Audit `members.member.bulk_updated` ohne Namen |
 | POST/GET/DELETE `/members/:id/documents/:kind` | edit/view/edit | `kind` = `privacy`\|`registration`; Upload multipart Feld `file`, PDF/JPEG/PNG/WebP ≤ 10 MB; ersetzt altes |
@@ -333,8 +335,15 @@ bei DB-Fehler nach Upload wird die Datei wieder entfernt.
   ohne Abblenden), Titel = Name + Badges (Stand, Zweitmitglied, ausgetreten), Kontaktlisten mit `ContactListField readonly`,
   Gruppen als Farb-Badges, Dokumente nur als Link; Footer „Verknüpfte Konten (n)“ (`link.view`), „Schließen“, „Bearbeiten“
   (`member.edit`, schaltet im selben Dialog frei, Tab bleibt). Früheres Sheet `MemberView` ist entfallen (2026-10-17, Wunsch des Nutzers).
-- `GroupsPage`: Tabelle Name, Typ, Leiter, Mitglieder, Treffpunkt, Treffen; Dialog mit `ColorPicker`, `MultiSelect`
-  Leiter, `FileField` Bild mit Zuschnitt (`crop`, runde Maske, Ergebnis quadratisch 1200 px, Hintergrund für Ränder = Gruppenfarbe; Original bis 25 MB, hochgeladen wird nur der Ausschnitt). Buttons nach `can(permissions, …)` ein-/ausgeblendet.
+- `GroupsPage` (seit v1.15.0, 2026-11-20, Nutzerwunsch „nicht seitwärts scrollen“): **Kachel-Raster** (`grid sm:grid-cols-2 xl:grid-cols-3`) statt Tabelle;
+  Karte = Auswahl-Checkbox, `EntityAvatar`, Name als Stretched Link zur Gruppenseite, Badges (Typ, Alter, Website), Leitung, Gruppenstunde, Treffpunkt,
+  „N Mitglieder“; `…`-Menü (Bearbeiten, E-Mail, Mitgliederliste (PDF), Löschen). „Alle auswählen“ + `MobileActionBar` wie bisher. Alte Links `?open=<id>`
+  leiten auf `/groups/<id>` um; die globale Suche verlinkt direkt dorthin.
+- `GroupDetailPage` (`/modules/members/groups/<id>`, Start-Reiter `?tab=overview|members|website`): Kopf mit Bild/Name/Badges, Bearbeiten + `…`-Menü
+  (Löschen → zurück zur Liste). Reiter **Übersicht** (Gruppenstunde + nächster Termin, Leitung (Mitglieder verlinkt), Mitglieder-Kennzahlen: Anzahl, Alter
+  von–bis, Ø, Stände; Geburtstage 14 Tage; Beschreibung), **Mitglieder** (nur `member.view`; `GET /members?groupId=` ≤ 200 aktive, Zeilen → `?open=`,
+  Link zur gefilterten Mitgliederliste), **Website** (Steckbrief-Felder, „Steckbrief bearbeiten“ öffnet `GroupDialog` im Reiter Website).
+- `GroupDialog`: `ColorPicker`, `MultiSelect` Leiter, `FileField` Bild mit Zuschnitt (`crop`, runde Maske, Ergebnis quadratisch 1200 px, Hintergrund für Ränder = Gruppenfarbe; Original bis 25 MB, hochgeladen wird nur der Ausschnitt). Buttons nach `can(permissions, …)` ein-/ausgeblendet.
 
 ## Audit
 `members.member.created|updated|deleted` (**ohne** Metadaten – Person nur über `target`), `members.group.created|updated|deleted` (metadata `name` = Gruppenname),

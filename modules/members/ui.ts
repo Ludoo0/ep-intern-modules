@@ -4,6 +4,7 @@ export default {
 	routes: {
 		'': () => import('./pages/MembersPage.svelte'),
 		groups: () => import('./pages/GroupsPage.svelte'),
+		'groups/:id': () => import('./pages/GroupDetailPage.svelte'),
 		fields: () => import('./pages/FieldsPage.svelte'),
 		retention: () => import('./pages/RetentionPage.svelte')
 	},

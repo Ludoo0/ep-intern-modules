@@ -305,7 +305,7 @@ describe('members', () => {
 		const admin = await hits(ids.admin!, 'Zeltfalken', 'members');
 		expect(admin.map((h) => [h.type, h.title])).toContainEqual(['Gruppe', 'Sippe Zeltfalken']);
 		expect(admin.find((h) => h.type === 'Gruppe')!.href).toBe(
-			`/modules/members/groups?open=${ids.group}`
+			`/modules/members/groups/${ids.group}`
 		);
 		const alice = await hits(ids.alice!, 'Zelt', 'members');
 		expect(alice.some((h) => h.type === 'Gruppe')).toBe(false);

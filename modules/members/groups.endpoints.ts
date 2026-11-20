@@ -20,6 +20,7 @@ import {
 	idParams,
 	type Group,
 	type GroupInput,
+	type GroupOverview,
 	type GroupLeaderUser,
 	type GroupType,
 	type GroupWebsite,
@@ -28,6 +29,8 @@ import {
 	type MemberRef
 } from './schemas';
 import { assertCanGrantLeader, syncLeaderGrantsAfterChange } from './leader.service';
+import { groupSummaries } from './dashboard';
+import { todayBerlin } from '$lib/sdk/dates';
 
 const MODULE = 'members';
 
@@ -332,6 +335,27 @@ export const groupEndpoints: AnyApiEndpoint[] = [
 			return (await withLeaderNames(ctx, [group]))[0]!;
 		}
 	} as ApiEndpoint,
+	defineEndpoint({
+		method: 'GET',
+		path: '/groups/:id/overview',
+		summary:
+			'Übersicht einer Gruppe (nächste Gruppenstunde, Geburtstage der nächsten 14 Tage mit members.member.view)',
+		tags: ['Modul: members'],
+		permission: 'members.group.view',
+		params: idParams,
+		rateLimit: { limit: 60, windowSec: 60 },
+		handler: async ({ ctx, params }): Promise<GroupOverview> => {
+			await moduleDb(MODULE).transaction((tx) => requireGroup(tx, params.id));
+			const today = todayBerlin();
+			const birthdays = core.permissions.has(ctx, 'members.member.view');
+			const [summary] = await groupSummaries([params.id], today, { birthdays });
+			return {
+				today,
+				nextMeeting: summary?.nextMeeting ?? null,
+				birthdays: summary?.birthdays ?? []
+			};
+		}
+	}),
 	{
 		method: 'POST',
 		path: '/groups',

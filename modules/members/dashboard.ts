@@ -19,7 +19,7 @@ import {
 import { addDays, daysBetween, todayBerlin } from '$lib/sdk/dates';
 import type { DashboardAgendaItem } from '$lib/sdk/types/dashboard';
 import { ledGroupIds } from './leader.service';
-import { LED_VIEW, MODULE_ID, type LedGroupOverview } from './schemas';
+import { LED_VIEW, MODULE_ID, type LedGroupOverview, type LedGroupSummary } from './schemas';
 
 const OWN_VIEW = 'members.own.view';
 /** Geburtstage in so vielen Tagen oder weniger erscheinen in „Meine Gruppe“ */
@@ -200,57 +200,65 @@ export const membersDashboard: ModuleDashboardSources = {
 };
 
 /**
- * Daten der Kachel „Meine Gruppe“: je selbst geleiteter Gruppe Name, aktive Mitglieder, nächste
- * Gruppenstunde und Geburtstage der nächsten `BIRTHDAY_DAYS` Tage (nur Name, Alter, Datum).
+ * Zusammenfassung je Gruppe: aktive Mitglieder, Gruppenstunde, nächster Termin und – mit `birthdays` –
+ * Geburtstage der nächsten `BIRTHDAY_DAYS` Tage (nur Name, Alter, Datum). Ohne Rechteprüfung.
  */
+export async function groupSummaries(
+	ids: readonly string[],
+	today: string,
+	opts: { birthdays: boolean }
+): Promise<LedGroupSummary[]> {
+	if (!ids.length) return [];
+	const groups = await loadGroups(ids);
+	const counts = await memberCounts(ids, today);
+	const rows = opts.birthdays
+		? await moduleDb(MODULE_ID).transaction((tx) =>
+				rowsOf(
+					tx,
+					sql`SELECT DISTINCT mg.group_id, m.id, m.first_name, m.last_name, m.scout_name,
+						to_char(m.birth_date, 'YYYY-MM-DD') AS birth_date
+					FROM member_groups mg JOIN members m ON m.id = mg.member_id
+					WHERE mg.group_id IN (${inList([...ids])}) AND ${active('m', today)}`
+				)
+			)
+		: [];
+	const limit = addDays(today, BIRTHDAY_DAYS);
+	return [...groups.values()].map((g) => {
+		const birthdays = rows
+			.filter((r) => String(r.group_id) === g.id)
+			.flatMap((r) => {
+				const b = nextBirthday(String(r.birth_date ?? ''), today);
+				if (!b || b.date > limit) return [];
+				return [
+					{
+						memberId: String(r.id),
+						firstName: String(r.first_name),
+						lastName: String(r.last_name),
+						scoutName: r.scout_name == null ? null : String(r.scout_name) || null,
+						date: b.date,
+						days: b.days,
+						age: b.age
+					}
+				];
+			})
+			.sort((a, b) => a.days - b.days || a.firstName.localeCompare(b.firstName, 'de'));
+		return {
+			id: g.id,
+			name: g.name,
+			memberCount: counts.get(g.id) ?? 0,
+			meetingWeekday: g.weekday,
+			meetingTime: g.time,
+			meetingEndTime: g.endTime,
+			meetingPlace: g.place,
+			nextMeeting: g.weekday ? nextWeekdayFrom(today, g.weekday) : null,
+			birthdays
+		};
+	});
+}
+
+/** Daten der Kachel „Meine Gruppe“: je selbst geleiteter Gruppe die Zusammenfassung inkl. Geburtstage. */
 export async function ledGroupOverview(ctx: RequestContext): Promise<LedGroupOverview> {
 	const today = todayBerlin();
 	const led = await ledGroupIds(ctx);
-	if (!led.length) return { today, groups: [] };
-	const groups = await loadGroups(led);
-	const counts = await memberCounts(led, today);
-	const rows = await moduleDb(MODULE_ID).transaction((tx) =>
-		rowsOf(
-			tx,
-			sql`SELECT DISTINCT mg.group_id, m.id, m.first_name, m.last_name, m.scout_name,
-					to_char(m.birth_date, 'YYYY-MM-DD') AS birth_date
-				FROM member_groups mg JOIN members m ON m.id = mg.member_id
-				WHERE mg.group_id IN (${inList(led)}) AND ${active('m', today)}`
-		)
-	);
-	const limit = addDays(today, BIRTHDAY_DAYS);
-	return {
-		today,
-		groups: [...groups.values()].map((g) => {
-			const birthdays = rows
-				.filter((r) => String(r.group_id) === g.id)
-				.flatMap((r) => {
-					const b = nextBirthday(String(r.birth_date ?? ''), today);
-					if (!b || b.date > limit) return [];
-					return [
-						{
-							memberId: String(r.id),
-							firstName: String(r.first_name),
-							lastName: String(r.last_name),
-							scoutName: r.scout_name == null ? null : String(r.scout_name) || null,
-							date: b.date,
-							days: b.days,
-							age: b.age
-						}
-					];
-				})
-				.sort((a, b) => a.days - b.days || a.firstName.localeCompare(b.firstName, 'de'));
-			return {
-				id: g.id,
-				name: g.name,
-				memberCount: counts.get(g.id) ?? 0,
-				meetingWeekday: g.weekday,
-				meetingTime: g.time,
-				meetingEndTime: g.endTime,
-				meetingPlace: g.place,
-				nextMeeting: g.weekday ? nextWeekdayFrom(today, g.weekday) : null,
-				birthdays
-			};
-		})
-	};
+	return { today, groups: await groupSummaries(led, today, { birthdays: true }) };
 }

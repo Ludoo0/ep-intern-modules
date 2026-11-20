@@ -762,6 +762,15 @@ export interface LedGroupOverview {
 	groups: LedGroupSummary[];
 }
 
+/** Antwort von `GET /groups/:id/overview` (Detailseite einer Gruppe) */
+export interface GroupOverview {
+	today: string;
+	/** Nächste Gruppenstunde ab heute (`YYYY-MM-DD`) oder `null` ohne Wochentag */
+	nextMeeting: string | null;
+	/** Geburtstage der nächsten 14 Tage – nur mit `members.member.view`, sonst leer */
+	birthdays: LedGroupBirthday[];
+}
+
 const linkCode = z
 	.string()
 	.trim()
