@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
-// Bestellungen: Artikel über den Dialog anlegen, für ein Mitglied bestellen (Warenkorb), Ware ausgeben,
-// Einkauf mit Teillieferung sehen.
+// Bestellungen: Artikel über den Dialog anlegen, für ein Mitglied bestellen und ausgeben, im Warenkorb für
+// den Stamm bestellen (ohne Rechnung), Einkauf mit Teillieferung sehen.
 
 const ADMIN = { email: 'admin@example.test', password: 'e2e-admin-password-1' };
 const ORIGIN = 'http://localhost:4173';
@@ -16,7 +16,7 @@ interface OrderDto {
 	id: string;
 	number: string;
 	status: string;
-	member: { id: string; name: string };
+	member: { id: string; name: string } | null;
 	items: { id: string; quantity: number; deliveredQty: number }[];
 }
 interface SupplierOrderDto {
@@ -133,7 +133,7 @@ test('Für ein Mitglied bestellen und ausgeben', async ({ page }) => {
 		`/modules/orders/orders?scope=all&search=${encodeURIComponent(lastName)}`
 	);
 	const order = list.items[0]!;
-	expect(order.member.name).toBe(memberName);
+	expect(order.member?.name).toBe(memberName);
 	expect(order.status).toBe('open');
 
 	await page.goto('/modules/orders?tab=bestellungen');
@@ -145,6 +145,37 @@ test('Für ein Mitglied bestellen und ausgeben', async ({ page }) => {
 
 	const after = await api<OrderDto>(page, 'GET', `/modules/orders/orders/${order.id}`);
 	expect(after.status).toBe('delivered');
+});
+
+test('Für den Stamm bestellen (Warenkorb, ohne Rechnung)', async ({ page }) => {
+	await setup(page);
+	await page.setViewportSize({ width: 1280, height: 900 });
+	await page.goto(`/modules/orders?q=${encodeURIComponent(title)}`);
+	await page.getByRole('button', { name: `${title} ansehen` }).click();
+	await page.getByRole('dialog').getByRole('button', { name: 'In den Warenkorb' }).click();
+	await page.keyboard.press('Escape');
+
+	await page.getByRole('button', { name: 'Bestellen für' }).click();
+	await page.getByRole('option', { name: 'Stamm (Stammesmaterial)' }).click();
+	await expect(page.getByText(/ohne Rechnung, die\s+Ware wird aus dem Lager/)).toBeVisible();
+	await page.getByRole('button', { name: 'Verbindlich bestellen' }).click();
+	const confirm = page.getByRole('alertdialog');
+	await expect(confirm.getByText(/Ohne Rechnung/)).toBeVisible();
+	await confirm.getByRole('button', { name: 'Verbindlich bestellen' }).click();
+	await expect(page.getByText(/aufgegeben \(ohne Rechnung\)/).first()).toBeVisible();
+
+	const list = await api<{ items: (OrderDto & { recipient: { kind: string } })[] }>(
+		page,
+		'GET',
+		'/modules/orders/orders?scope=all&search=Stamm'
+	);
+	const order = list.items.find((o) => o.recipient.kind === 'stamm');
+	expect(order).toBeTruthy();
+
+	await page.goto('/modules/orders?tab=bestellungen');
+	const row = page.getByRole('row', { name: new RegExp(order!.number) });
+	await expect(row.getByText('Stamm')).toBeVisible();
+	await expect(row.getByText('ohne Rechnung')).toBeVisible();
 });
 
 test('Einkauf mit Teillieferung', async ({ page }) => {

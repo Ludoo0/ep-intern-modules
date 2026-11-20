@@ -7,7 +7,7 @@ paths: ["modules/orders/**", "tests/**/orders*", "tests/integration/treasury-ord
 Stammesartikel (Halstuch, Liederbuch, Kluft …) bestellen: Benutzer*innen bestellen für ihre **verknüpften Mitglieder**, die Rechnung geht
 **sofort** über die Kasse raus. Die*der Kämmerer*in pflegt Artikel (Größen, Preise, Bilder, Notizen, Nachbestelllinks), gibt Ware aus
 (auch teilweise), sieht Lager und Fehlmengen, bestellt beim Lieferanten (Teillieferung) und gibt die Lieferantenrechnung als Auszahlung
-an die Kasse. Schema `mod_orders`, Version 1.0.0, **hängt von `members` ab**, optional `treasury` (Rechnungen/Auszahlungen) und
+an die Kasse. Gruppenleitungen bestellen für ihre Gruppen, Materialwart*in/Kämmerer*in für den Stamm (beides ohne Rechnung). Schema `mod_orders`, Version 1.3.0, **hängt von `members` ab**, optional `treasury` (Rechnungen/Auszahlungen) und
 `offices` (Amts-Vorlage „Kämmerer*in“). Navigation „Bestellungen“ (Icon `shopping-basket`).
 
 ## Entscheidungen des Nutzers (2026-10-19, nicht ungefragt ändern)
@@ -17,12 +17,20 @@ für **jedes** Mitglied.
 **2026-10-19:** Der Warenkorb (Tab „Bestellen“) bietet **nur** die verknüpften Mitglieder (Dropdown, keine Suche); für andere Mitglieder bestellt
 die*der Kämmerer*in im Tab „Bestellungen“ über **„Bestellung anlegen“** (`OrderCreateDialog`: Mitglied suchen, Positionen, Notiz → `POST /orders`).
 
+**2026-11-20 (1.3.0): Gruppen- und Stammesbestellungen.** Gruppenleitungen (Recht `orders.order.group`) bestellen für ihre **selbst
+geleiteten Gruppen** (`members.listLedGroups`), Materialwart*in und Kämmerer*in (Recht `orders.order.stamm`) für den **Stamm**. Beides
+**ohne Rechnung** (interne Bestellung; Ausgabe/Storno wie gewohnt). Gruppenbestellungen sehen und stornieren (solange nichts ausgegeben)
+**alle Leitungen der Gruppe** (mit Recht `group`), Stammesbestellungen alle mit Recht `stamm` (im Tab „Meine Bestellungen“). Ausgabe bleibt
+bei `manage`. `manage` bestellt im Dialog „Bestellung anlegen“ auch für jede Gruppe (`GET /groups`) und den Stamm.
+
 ## Dateien (`modules/orders/`)
 | Datei | Inhalt |
 |---|---|
 | `module.ts` | Manifest (Rechte + Beschreibungen, `defaultRoleGrants` Mitglied/Kämmerer*in, Amts-Vorlage `kaemmerer`), Migrationen, Jobs `sync-treasury` (stündlich) + `deficit-digest` (täglich), Endpoint-Reihenfolge images → articles → stock → supplier → orders; Hooks `search`, `resetAreas`/`resetUsers`, `onUserDeleted`, `subjectExport` (kein `onMemberDeleted`) |
 | `ui.ts` | Route `''` → `OrdersPage`; Dashboard-Kacheln `manage` („Bestellungen & Lager“, mit `orders.order.manage` oder `orders.stock.manage`) und `mine` („Meine Bestellungen“), Komponenten in `pages/widgets/` |
 | `search.ts` | Globale Suche (`ordersSearch`): Artikel nach Titel (Katalog-Sichtbarkeit, mit `orders.article.manage` auch inaktive), Bestellungen nach Nummer/Mitgliedsname (eigene bzw. verknüpfte Mitglieder, mit `orders.order.manage` alle) |
+| `assist.ts` | KI-Schreibhilfe (`ordersAssist`, Recht `orders.ai.use`) für Artikelbeschreibungen |
+| `dashboard.ts` | Übersicht „Zu erledigen“ (`ordersDashboard`): ausgeben, Fehlmengen, offene Einkäufe, unbezahlte Lieferantenrechnungen |
 | `user-deleted.ts` | `onUserDeleted`: Daten bleiben, nur Kontoverweise (`created_by`, `uploaded_by`, `ordered_by`) → `NULL` |
 | `subject-export.ts` | Datenauskunft (`subjectExport`), siehe unten |
 | `schemas.ts` | API-Vertrag (Zod + DTOs `Article`, `Order`, `StockRow`, `SupplierOrder` …, Labels, Grenzen, Kassen-Schlüssel `invoiceSourceKey`/`invoiceLineRef`/`payableRef`, `imageUrl`) |
@@ -37,12 +45,14 @@ die*der Kämmerer*in im Tab „Bestellungen“ über **„Bestellung anlegen“*
 | `notify.ts` | Amt `kaemmerer`: `order-created` (nach Bestellung), `stock-deficit` (Tagesjob, nur bei geändertem Stand – `digest_state`) |
 | `reset.ts` | Bereich `all` (alle Tabellen + Bilder, `rebuild`), `resetUsers` |
 | `pages/` | `OrdersPage` (Tabs `?tab=` bestellen · meine · bestellungen · lager · einkauf · artikel je nach Recht), `CatalogTab`/`ArticleCard`/`ArticleDetailDialog`/`CartPanel` (Warenkorb in `sessionStorage`, mobil `MobileActionBar` + Sheet), `MyOrdersTab`, `ArticlesTab`/`ArticleDialog`/`VariantEditor`/`ImageManager`, `OrdersAdminTab`/`OrderCreateDialog`/`OrderEditDialog`/`HandoutDialog`/`CancelItemsDialog`, `StockTab`/`StockCorrectionDialog`, `SupplierOrdersTab`/`SupplierOrderDialog`/`ReceiveDialog`/`SupplierInvoiceDialog`, Badges `OrderStatusBadge`/`PaymentBadge`/`SupplierStatusBadge`, `helpers.ts`, `admin-helpers.ts` |
-| `migrations/0001_init.sql`, `0002_digest_state.sql`, `0003_fk_indexes.sql` | Schema; Merker der Fehlmengen-Meldung; Indizes `stock_movements.order_item_id`/`supplier_item_id` (#73) |
+| `migrations/0001_init.sql`, `0002_digest_state.sql`, `0003_fk_indexes.sql`, `0004_recipients.sql` | Schema; Merker der Fehlmengen-Meldung; Indizes `stock_movements.order_item_id`/`supplier_item_id` (#73); Empfängerart `recipient_kind` + `group_id` (1.3.0) |
 
 ## Datenmodell
 - `articles` (`title`, `description`, `notes` intern, `reorder_url`, `active`, `position`, `archived_at`) · `article_variants` (`label` – `''` = ohne Größe,
   `price_cents`, `reorder_url`, `stock` ≥ 0, `min_stock`, `archived_at`; **jeder Artikel ≥ 1 Variante**) · `article_images` (thumb/web-Pfade, erstes = Titelbild).
-- `orders` (`B-JJJJ-NNNN`, `member_id` ohne FK + `member_name` Snapshot, `ordered_by`, `invoice_id`/`invoice_number`, `treasury_dirty`, `treasury_synced_at`)
+- `orders` (`B-JJJJ-NNNN`, `recipient_kind` member|group|stamm (CHECK `orders_recipient_check`), `member_id` bzw. `group_id` ohne FK (je nach Art, Stamm: beide
+  `NULL`) + `member_name` = Namens-Snapshot des Empfängers (Gruppenname bzw. „Stamm“), `ordered_by`, `invoice_id`/`invoice_number`, `treasury_dirty`
+  (bei group/stamm immer `false`), `treasury_synced_at`)
   · `order_items` (Snapshot Titel/Größe/Einzelpreis, `quantity`, `delivered_qty`, `cancelled_qty`, CHECK Summe ≤ Menge).
 - `supplier_orders` (`E-JJJJ-NNNN`, Lieferant, Datum, Rechnung `invoice_amount_cents`/`invoice_recipient`/`payable_ref`, `closed_at`) · `supplier_order_items`
   (`received_qty`, `cancelled_qty`, `unit_cost_cents`).
@@ -79,6 +89,8 @@ die*der Kämmerer*in im Tab „Bestellungen“ über **„Bestellung anlegen“*
 - Bestellung → `upsertOrderInvoice` (Rechnung `source='order'`, `source_key = order:<id>`, Posten `order:<id>:<itemId>` mit `member_id`, Notiz „Bestellung B-…“
   + Notiz der Bestellung). Neu → `R-JJJJ-NNNN` + Mail mit PDF; Storno/Teilstorno → Posten angepasst, versendete Rechnungen bekommen „Geänderte Rechnung“/„Stornierung“;
   keine Posten mehr → Rechnung storniert (Bezahltes wird beim nächsten Kassen-Abgleich Guthaben).
+- **Nur `recipient_kind = 'member'`** geht an die Kasse: `pushInvoice` markiert Gruppen-/Stammesbestellungen nur als abgeglichen, `syncTreasury`
+  filtert sie aus, `DELETE` ruft die Kasse für sie nicht auf.
 - Kasse inaktiv oder Fehler → Bestellung bleibt gültig, `treasury_dirty = true`, Job `orders.sync-treasury` holt nach (erste Rechnung wird dann verschickt).
 - Lieferantenrechnung (`PUT /supplier-orders/:id/invoice`, multipart, Beleg ≤ 10 MB) → `upsertOrderPayable` (`source='order'`, Schlüssel `order-supplier:<id>`,
   IBAN verschlüsselt, Meldung an Amt „Kasse“); ohne aktive Kasse 409. Entfernen → `cancelOrderPayable` (bezahlt → 409).
@@ -96,19 +108,26 @@ die*der Kämmerer*in im Tab „Bestellungen“ über **„Bestellung anlegen“*
 | `orders.order.delete` | Bestellungen ganz löschen (Rechnung wird storniert) |
 | `orders.article.manage` | Artikel, Größen, Preise, Notizen, Nachbestelllinks, Bilder |
 | `orders.stock.manage` | Lager, Korrekturen, Einkauf, Wareneingang, Lieferantenrechnung an die Kasse |
-`defaultRoleGrants`: „Mitglied“ → view + create; „Kämmerer*in“ → alle (edit/delete seit 1.2.0, einmalig nachvergeben). Die Amts-Vorlage `kaemmerer` verleiht **keine** Rolle von selbst – Rolle „Kämmerer*in“ im
+| `orders.order.group` | Für selbst geleitete Gruppen bestellen (ohne Rechnung), Bestellungen dieser Gruppen sehen/stornieren (ohne Ausgabe) |
+| `orders.order.stamm` | Für den Stamm bestellen (ohne Rechnung), alle Stammesbestellungen sehen/stornieren (ohne Ausgabe) |
+`defaultRoleGrants`: „Mitglied“ → view + create; „Kämmerer*in“ → alle (edit/delete seit 1.2.0, stamm seit 1.3.0, einmalig nachvergeben);
+„Gruppenleitung“ (Rolle aus `members`) → view + group; „Materialwart*in“ (Rolle aus `material`) → view + stamm.
+Zugriff ohne `manage` zentral über `orderAccess`/`isOwnOrder`/`ownOrdersSql` (`orders.service.ts`): selbst bestellt, verknüpftes Mitglied, geleitete
+Gruppe (nur mit `group`), Stamm (nur mit `stamm`); Selbst-Storno braucht das Recht der Empfängerart (`ownCancelPermission`). Die Amts-Vorlage `kaemmerer` verleiht **keine** Rolle von selbst – Rolle „Kämmerer*in“ im
 Amt verknüpfen (Modul `offices`), dann erhalten die Inhaber*innen die Rechte. Keine `orders.storage.*`-Rechte (Bilder per Systemkontext).
 
 ## API (`/api/v1/modules/orders/…`)
 `GET/POST /articles`, `PUT /articles/order`, `GET/PATCH/DELETE /articles/:id`, Bilder `POST /articles/:id/images`, `PUT …/images/order`,
-`DELETE …/images/:imageId`, `GET …/images/:imageId/:variant` · `GET /my/members`, `GET /members?search=`, `GET /overview` · `GET/POST /orders`,
+`DELETE …/images/:imageId`, `GET …/images/:imageId/:variant` · `GET /my/members`, `GET /my/recipients` (Warenkorb: Mitglieder, Gruppen, Stamm),
+`GET /groups` (manage), `GET /members?search=`, `GET /overview` · `GET/POST /orders` (Body `recipientKind` member|group|stamm + `memberId`/`groupId`; ohne `recipientKind` = member),
 `GET/PATCH/DELETE /orders/:id`, `POST /orders/:id/cancel|handout` · `GET /stock`, `POST /stock/corrections`, `GET /stock/movements` · `GET /supplier-orders/suggestion`,
 `GET/POST /supplier-orders`, `GET/PATCH /supplier-orders/:id`, `POST …/:id/receive|cancel-rest|close|reopen`, `PUT/DELETE …/:id/invoice`.
 Audit `orders.article.*`, `orders.order.created|updated|cancelled|handed-out|deleted`, `orders.stock.corrected`, `orders.supplier-order.*` – nur IDs/Zähler/Beträge.
 
 ## Benachrichtigungen an Bestellende (2026-10-25, `customer-notify.ts`)
 - `my-order`: angelegt (wenn jemand anderes bestellt), geändert, ausgegeben, (teilweise) storniert, gelöscht → bestellendes Konto + mit dem Mitglied verknüpfte Konten
-  (`listLinkedUserIds`), nur mit `orders.order.view`, nie die handelnde Person. Nur manuell geprüft über den Typcheck (kein eigener Test).
+  (`listLinkedUserIds`), nur mit `orders.order.view`, nie die handelnde Person. Gruppen-/Stammesbestellungen: nur das bestellende Konto
+  (andere Leitungen bekommen keine Nachricht – offen), Texte ohne Rechnungshinweis. Nur manuell geprüft über den Typcheck (kein eigener Test).
 
 ## Tests und Demo
 Unit `tests/unit/orders-stock.test.ts`; Integration `tests/integration/orders-articles.test.ts` (Fake-Storage), `orders.test.ts` (u. a. „Bestellung bearbeiten und löschen“), `orders-treasury.test.ts` (Rechnung bei Bearbeiten/Löschen),

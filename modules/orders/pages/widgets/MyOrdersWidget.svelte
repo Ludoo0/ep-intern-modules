@@ -7,7 +7,7 @@
 	import { DashboardCard } from '$lib/components/layout';
 	import { formatEuro } from '$lib/components/layout/money';
 	import { BASE_PATH, type Order, type OrderList } from '../../schemas';
-	import { errorText, formatDate } from '../helpers';
+	import { errorText, formatDate, recipientLabel } from '../helpers';
 	import OrderStatusBadge from '../OrderStatusBadge.svelte';
 
 	let { onstatus }: DashboardWidgetProps = $props();
@@ -65,7 +65,7 @@
 				>
 					<span class="min-w-0">
 						<span class="block truncate font-medium">
-							<span class="tabular-nums">{o.number}</span> · {o.member.name}
+							<span class="tabular-nums">{o.number}</span> · {recipientLabel(o.recipient)}
 						</span>
 						<span class="block truncate text-xs text-muted-foreground tabular-nums">
 							{formatDate(o.createdAt)} · {formatEuro(o.totalCents)}

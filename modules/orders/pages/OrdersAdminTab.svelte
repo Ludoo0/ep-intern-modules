@@ -42,6 +42,8 @@
 	import OrderEditDialog from './OrderEditDialog.svelte';
 	import OrderStatusBadge from './OrderStatusBadge.svelte';
 	import PaymentBadge from './PaymentBadge.svelte';
+	import RecipientName from './RecipientName.svelte';
+	import { recipientLabel } from './helpers';
 
 	let {
 		onnavigate
@@ -155,7 +157,9 @@
 	const deleteText = $derived.by(() => {
 		const o = deleteOrder;
 		if (!o) return undefined;
-		const parts = [`Die Bestellung ${o.number} für ${o.member.name} wird unwiderruflich gelöscht.`];
+		const parts = [
+			`Die Bestellung ${o.number} für ${recipientLabel(o.recipient)} wird unwiderruflich gelöscht.`
+		];
 		if (o.invoiceNumber) {
 			parts.push(
 				o.payment && o.payment.paidCents > 0
@@ -303,7 +307,7 @@
 		{#snippet head()}
 			<Table.Row>
 				<Table.Head>Bestellung</Table.Head>
-				<Table.Head>Mitglied</Table.Head>
+				<Table.Head>Für</Table.Head>
 				<Table.Head>Status</Table.Head>
 				<Table.Head class="text-right">Ausgegeben</Table.Head>
 				<Table.Head class="text-right">Betrag</Table.Head>
@@ -336,8 +340,8 @@
 					<div class="text-xs text-muted-foreground">{fmtDate(o.createdAt)}</div>
 				</Table.Cell>
 				<Table.Cell class="max-w-60">
-					<div class="truncate">{o.member.name}</div>
-					{#if o.orderedBy && o.orderedBy.name !== o.member.name}
+					<div class="truncate"><RecipientName recipient={o.recipient} /></div>
+					{#if o.orderedBy && (o.recipient.kind !== 'member' || o.orderedBy.name !== o.recipient.name)}
 						<div class="truncate text-xs text-muted-foreground">von {o.orderedBy.name}</div>
 					{/if}
 				</Table.Cell>
@@ -359,7 +363,11 @@
 				</Table.Cell>
 				<Table.Cell class="text-right tabular-nums">{formatEuro(o.totalCents)}</Table.Cell>
 				<Table.Cell>
-					<PaymentBadge payment={o.payment} pending={!o.payment && o.totalCents > 0} />
+					{#if o.recipient.kind === 'member'}
+						<PaymentBadge payment={o.payment} pending={!o.payment && o.totalCents > 0} />
+					{:else}
+						<span class="text-xs text-muted-foreground">ohne Rechnung</span>
+					{/if}
 				</Table.Cell>
 				<Table.Cell
 					class="text-right whitespace-nowrap"

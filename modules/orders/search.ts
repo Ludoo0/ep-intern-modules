@@ -2,14 +2,14 @@
  * Globale Suche (Befehlspalette): Artikel nach Titel und Bestellungen nach Nummer oder Mitgliedsname.
  * Sichtbarkeit wie in der Oberfläche: Katalog = aktive Artikel mit mindestens einer aktiven Größe,
  * mit `orders.article.manage` auch inaktive; Bestellungen wie `GET /orders?scope=mine` (eigene bzw.
- * die verknüpfter Mitglieder), mit `orders.order.manage` alle.
+ * die verknüpfter Mitglieder, geleiteter Gruppen, Stamm), mit `orders.order.manage` alle.
  */
 import { sql, type SQL } from 'drizzle-orm';
 import type { ModuleSearchProvider, RequestContext } from '$lib/sdk/server';
 import type { SearchHit } from '$lib/sdk/types/search';
 import { formatEuro } from '$lib/components/layout/money';
-import { idList, iso, mdb, num, rows } from './db';
-import { canManage, linkedMemberIds, ORDER_STATUS_SQL } from './orders.service';
+import { iso, mdb, num, rows } from './db';
+import { canManage, ORDER_STATUS_SQL, orderAccess, ownOrdersSql } from './orders.service';
 import { formatDateDe } from '$lib/sdk/dates';
 import { priceRange } from './stock';
 import { ORDER_STATUS_LABELS, PERMISSIONS, type OrderStatus } from './schemas';
@@ -29,15 +29,9 @@ function priceText(prices: number[]): string | undefined {
 async function run(ctx: RequestContext, query: string, limit: number): Promise<SearchHit[]> {
 	const manageArticles = ctx.permissions.has(PERMISSIONS.articles);
 	const manageOrders = canManage(ctx);
-	// Verknüpfte Mitglieder über den Dienst `members` – vor der Transaktion
-	const linked = manageOrders ? [] : [...(await linkedMemberIds(ctx))];
+	// Verknüpfte Mitglieder und geleitete Gruppen über den Dienst `members` – vor der Transaktion
+	const ownFilter: SQL = manageOrders ? sql`TRUE` : ownOrdersSql(ctx, await orderAccess(ctx), 'o');
 	const pattern = likePattern(query);
-
-	const ownFilter: SQL = manageOrders
-		? sql`TRUE`
-		: linked.length
-			? sql`(o.ordered_by = ${ctx.userId} OR o.member_id IN (${idList(linked)}))`
-			: sql`o.ordered_by = ${ctx.userId}`;
 	const articleFilter: SQL = manageArticles
 		? sql`a.archived_at IS NULL`
 		: sql`a.active AND a.archived_at IS NULL`;

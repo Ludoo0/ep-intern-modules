@@ -7,6 +7,7 @@
 	import { NumberStepper } from '$lib/components/layout';
 	import type { Order, OrderItem } from '../schemas';
 	import { API, fieldErrorsFrom, itemName } from './admin-helpers';
+	import { recipientLabel } from './helpers';
 
 	let {
 		open = $bindable(false),
@@ -84,8 +85,8 @@
 		<Dialog.Header>
 			<Dialog.Title>Ausgeben{order ? ` – ${order.number}` : ''}</Dialog.Title>
 			<Dialog.Description>
-				{order ? `Für ${order.member.name}. ` : ''}Was nicht auf Lager ist, bleibt offen und wird
-				nach dem nächsten Wareneingang ausgegeben.
+				{order ? `Für ${recipientLabel(order.recipient)}. ` : ''}Was nicht auf Lager ist, bleibt
+				offen und wird nach dem nächsten Wareneingang ausgegeben.
 			</Dialog.Description>
 		</Dialog.Header>
 		<form class="space-y-4" onsubmit={submit} novalidate>

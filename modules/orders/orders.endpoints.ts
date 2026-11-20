@@ -1,5 +1,6 @@
 /**
- * Bestellungen von Mitgliedern: Auswahl der Mitglieder, Bestellen (Rechnung sofort über die Kasse),
+ * Bestellungen für Mitglieder (Rechnung sofort über die Kasse), Gruppen und den Stamm (ohne Rechnung):
+ * Auswahl der Empfänger, Bestellen,
  * Liste/Detail, Storno (auch teilweise), Ausgabe aus dem Lager, nachträgliches Bearbeiten und Löschen.
  * Übersicht für die Verwaltung.
  */
@@ -26,6 +27,9 @@ import {
 	PERMISSIONS,
 	type MemberOption,
 	type Order,
+	type RecipientKind,
+	type RecipientOptions,
+	STAMM_NAME,
 	type OrderCreated,
 	type OrderDeleted,
 	type OrderList,
@@ -37,12 +41,17 @@ import {
 	canManage,
 	isOwnOrder,
 	itemQty,
-	linkedMemberIds,
+	ledGroups,
 	linkedMemberOptions,
 	loadOrderOr404,
 	loadOrders,
 	loadStock,
-	ORDER_STATUS_SQL
+	NO_ACCESS,
+	ORDER_STATUS_SQL,
+	orderAccess,
+	ownCancelPermission,
+	ownOrdersSql,
+	type OrderAccess
 } from './orders.service';
 import { notifyOrderCreated } from './notify';
 import { pushInvoice } from './treasury-link';
@@ -55,10 +64,10 @@ type Issue = { path: (string | number)[]; message: string };
 async function buildOne(
 	ctx: Parameters<typeof buildOrders>[0],
 	id: string,
-	linkedIds?: Set<string>
+	access?: OrderAccess
 ): Promise<Order> {
 	const data = await mdb().transaction((tx) => loadOrders(tx, [id]));
-	const [order] = await buildOrders(ctx, data, { manage: canManage(ctx), linkedIds });
+	const [order] = await buildOrders(ctx, data, { manage: canManage(ctx), access });
 	if (!order) throw errors.notFound('Bestellung nicht gefunden');
 	return order;
 }
@@ -126,6 +135,36 @@ export const ordersEndpoints = [
 	}),
 	defineEndpoint({
 		method: 'GET',
+		path: '/my/recipients',
+		summary:
+			'Wofür im Warenkorb bestellt werden darf: verknüpfte Mitglieder, geleitete Gruppen, Stamm',
+		tags: TAGS,
+		permission: PERMISSIONS.view,
+		handler: async ({ ctx }): Promise<RecipientOptions> => {
+			const p = ctx.permissions;
+			if (!p.has(PERMISSIONS.create) && !p.has(PERMISSIONS.group) && !p.has(PERMISSIONS.stamm)) {
+				throw errors.forbidden('Keine Berechtigung zum Bestellen');
+			}
+			const [members, groups] = await Promise.all([
+				p.has(PERMISSIONS.create) ? linkedMemberOptions(ctx) : Promise.resolve([]),
+				ledGroups(ctx)
+			]);
+			return { members, groups, stamm: p.has(PERMISSIONS.stamm) };
+		}
+	}),
+	defineEndpoint({
+		method: 'GET',
+		path: '/groups',
+		summary: 'Alle Gruppen (Bestellen für jede Gruppe mit Verwaltungsrecht)',
+		tags: TAGS,
+		permission: PERMISSIONS.manage,
+		handler: async (): Promise<MemberOption[]> => {
+			const list = await (await membersService()).listGroups();
+			return list.map((g) => ({ id: g.id, name: g.name }));
+		}
+	}),
+	defineEndpoint({
+		method: 'GET',
 		path: '/members',
 		summary: 'Mitglieder suchen (Bestellen für jedes Mitglied, ab 2 Zeichen)',
 		tags: TAGS,
@@ -154,38 +193,71 @@ export const ordersEndpoints = [
 	defineEndpoint({
 		method: 'POST',
 		path: '/orders',
-		summary: 'Bestellen (für ein verknüpftes Mitglied; mit Verwaltungsrecht für jedes)',
+		summary: 'Bestellen für ein Mitglied, eine Gruppe oder den Stamm',
 		description:
-			'Legt die Bestellung an und schickt die Rechnung sofort über die Kasse. Ist die Kasse nicht aktiv, ' +
-			'folgt die Rechnung über den stündlichen Abgleich (`invoicePending`).',
+			'`recipientKind` `member` (Standard, Recht `create` für verknüpfte Mitglieder): legt die Bestellung an und ' +
+			'schickt die Rechnung sofort über die Kasse; ist die Kasse nicht aktiv, folgt sie über den stündlichen ' +
+			'Abgleich (`invoicePending`). `group` (Recht `group`, nur selbst geleitete Gruppen) und `stamm` (Recht ' +
+			'`stamm`): ohne Rechnung. Mit Verwaltungsrecht für jedes Mitglied, jede Gruppe und den Stamm.',
 		tags: TAGS,
-		permission: PERMISSIONS.create,
+		permission: PERMISSIONS.view,
 		body: orderCreateInput,
 		handler: async ({ ctx, body }): Promise<OrderCreated> => {
 			const input = body as {
-				memberId: string;
+				recipientKind: RecipientKind;
+				memberId?: string;
+				groupId?: string;
 				items: { variantId: string; quantity: number }[];
 				note: string | null;
 			};
 			const manage = canManage(ctx);
-			// Mitglied prüfen (Dienst `members`, vor der Transaktion)
-			let memberName: string | null = null;
-			const linked = await linkedMemberOptions(ctx).catch((e: unknown) => {
-				logBestEffort('orders.order.linked-members', e, { ctx, target: input.memberId });
-				return [] as MemberOption[];
-			});
-			const own = linked.find((m) => m.id === input.memberId);
-			if (own) {
-				const [m] = await (await membersService()).searchMembers({ ids: [input.memberId] });
-				memberName = m?.name ?? own.name;
-			} else if (manage) {
-				const [m] = await (await membersService()).searchMembers({ ids: [input.memberId] });
-				if (!m) {
-					throw errors.validation([{ path: ['memberId'], message: 'Mitglied nicht gefunden' }]);
+			const kind = input.recipientKind;
+			const memberId = kind === 'member' ? input.memberId! : null;
+			const groupId = kind === 'group' ? input.groupId! : null;
+			// Empfänger prüfen (Dienst `members`, vor der Transaktion)
+			let memberName: string;
+			if (kind === 'member') {
+				if (!manage && !ctx.permissions.has(PERMISSIONS.create)) {
+					throw errors.forbidden(`Berechtigung fehlt: ${PERMISSIONS.create}`);
 				}
-				memberName = m.name;
+				const linked = await linkedMemberOptions(ctx).catch((e: unknown) => {
+					logBestEffort('orders.order.linked-members', e, { ctx, target: memberId! });
+					return [] as MemberOption[];
+				});
+				const own = linked.find((m) => m.id === memberId);
+				if (own) {
+					const [m] = await (await membersService()).searchMembers({ ids: [memberId!] });
+					memberName = m?.name ?? own.name;
+				} else if (manage) {
+					const [m] = await (await membersService()).searchMembers({ ids: [memberId!] });
+					if (!m) {
+						throw errors.validation([{ path: ['memberId'], message: 'Mitglied nicht gefunden' }]);
+					}
+					memberName = m.name;
+				} else {
+					throw errors.notFound('Mitglied nicht gefunden');
+				}
+			} else if (kind === 'group') {
+				if (!manage && !ctx.permissions.has(PERMISSIONS.group)) {
+					throw errors.forbidden(`Berechtigung fehlt: ${PERMISSIONS.group}`);
+				}
+				const led = (await ledGroups(ctx)).find((g) => g.id === groupId);
+				if (led) memberName = led.name;
+				else if (manage) {
+					const all = await (await membersService()).listGroups();
+					const g = all.find((x) => x.id === groupId);
+					if (!g) {
+						throw errors.validation([{ path: ['groupId'], message: 'Gruppe nicht gefunden' }]);
+					}
+					memberName = g.name;
+				} else {
+					throw errors.notFound('Gruppe nicht gefunden');
+				}
 			} else {
-				throw errors.notFound('Mitglied nicht gefunden');
+				if (!manage && !ctx.permissions.has(PERMISSIONS.stamm)) {
+					throw errors.forbidden(`Berechtigung fehlt: ${PERMISSIONS.stamm}`);
+				}
+				memberName = STAMM_NAME;
 			}
 
 			const orderId = crypto.randomUUID();
@@ -212,9 +284,10 @@ export const ordersEndpoints = [
 				if (issues.length) throw errors.validation(issues);
 				const { number, year, seq } = await nextNumber(tx, 'orders');
 				await tx.execute(
-					sql`INSERT INTO orders (id, number, year, seq, member_id, member_name, ordered_by, note)
-						VALUES (${orderId}, ${number}, ${year}, ${seq}, ${input.memberId}, ${memberName},
-							${ctx.userId}, ${input.note})`
+					sql`INSERT INTO orders (id, number, year, seq, recipient_kind, member_id, group_id,
+							member_name, ordered_by, note, treasury_dirty)
+						VALUES (${orderId}, ${number}, ${year}, ${seq}, ${kind}, ${memberId}, ${groupId},
+							${memberName}, ${ctx.userId}, ${input.note}, ${kind === 'member'})`
 				);
 				const lines: {
 					articleTitle: string;
@@ -246,7 +319,8 @@ export const ordersEndpoints = [
 			const totalCents = created.lines.reduce((s, l) => s + l.totalCents, 0);
 			await notifyOrderCreated(ctx, {
 				number: created.number,
-				memberName: memberName ?? '',
+				recipientKind: kind,
+				memberName,
 				items: created.lines,
 				totalCents
 			});
@@ -254,7 +328,9 @@ export const ordersEndpoints = [
 				target: orderId,
 				metadata: {
 					number: created.number,
-					memberId: input.memberId,
+					recipientKind: kind,
+					memberId,
+					groupId,
 					items: created.lines.length,
 					quantity: created.lines.reduce((s, l) => s + l.quantity, 0),
 					totalCents,
@@ -262,7 +338,7 @@ export const ordersEndpoints = [
 				}
 			});
 			await notifyCustomer(ctx, orderId, 'created');
-			const order = await buildOne(ctx, orderId, new Set(linked.map((m) => m.id)));
+			const order = await buildOne(ctx, orderId, await orderAccess(ctx));
 			return { order, mailed: push.mailed, invoicePending: push.pending };
 		}
 	}),
@@ -284,16 +360,9 @@ export const ordersEndpoints = [
 			if (q.scope === 'all' && !canManage(ctx)) {
 				throw errors.forbidden('Alle Bestellungen nur mit Verwaltungsrecht');
 			}
-			const linkedIds = await linkedMemberIds(ctx);
+			const access = await orderAccess(ctx);
 			const conds: SQL[] = [];
-			if (q.scope === 'mine') {
-				const linked = [...linkedIds];
-				conds.push(
-					linked.length
-						? sql`(s.ordered_by = ${ctx.userId} OR s.member_id IN (${idList(linked)}))`
-						: sql`s.ordered_by = ${ctx.userId}`
-				);
-			}
+			if (q.scope === 'mine') conds.push(ownOrdersSql(ctx, access, 's'));
 			if (q.status === 'active') conds.push(sql`s.status IN ('open', 'partial')`);
 			else if (q.status !== 'all') conds.push(sql`s.status = ${q.status}`);
 			if (q.search) {
@@ -314,7 +383,7 @@ export const ordersEndpoints = [
 				return { total: num(c?.n), data: await loadOrders(tx, ids) };
 			});
 			return {
-				items: await buildOrders(ctx, data, { manage: canManage(ctx), linkedIds }),
+				items: await buildOrders(ctx, data, { manage: canManage(ctx), access }),
 				total
 			};
 		}
@@ -328,12 +397,12 @@ export const ordersEndpoints = [
 		params: idParams,
 		handler: async ({ ctx, params }): Promise<Order> => {
 			const { id } = params as { id: string };
-			const linkedIds = canManage(ctx) ? new Set<string>() : await linkedMemberIds(ctx);
+			const access = canManage(ctx) ? NO_ACCESS : await orderAccess(ctx);
 			const data = await mdb().transaction((tx) => loadOrderOr404(tx, id));
-			if (!canManage(ctx) && !isOwnOrder(data.order, ctx, linkedIds)) {
+			if (!canManage(ctx) && !isOwnOrder(data.order, ctx, access)) {
 				throw errors.notFound('Bestellung nicht gefunden');
 			}
-			const [order] = await buildOrders(ctx, [data], { manage: canManage(ctx), linkedIds });
+			const [order] = await buildOrders(ctx, [data], { manage: canManage(ctx), access });
 			return order!;
 		}
 	}),
@@ -342,7 +411,8 @@ export const ordersEndpoints = [
 		path: '/orders/:id/cancel',
 		summary: 'Bestellung (teilweise) stornieren',
 		description:
-			'Eigene Bestellungen nur, solange nichts ausgegeben ist; mit Verwaltungsrecht jede offene Menge. ' +
+			'Eigene Bestellungen (Mitglied: Recht `create`, Gruppe: `group`, Stamm: `stamm`) nur, solange ' +
+			'nichts ausgegeben ist; mit Verwaltungsrecht jede offene Menge. ' +
 			'Ohne `items` wird alles Offene storniert. Die Rechnung in der Kasse wird angepasst.',
 		tags: TAGS,
 		permission: PERMISSIONS.view,
@@ -355,15 +425,16 @@ export const ordersEndpoints = [
 				reason: string | null;
 			};
 			const manage = canManage(ctx);
-			const linkedIds = manage ? new Set<string>() : await linkedMemberIds(ctx);
+			const access = manage ? NO_ACCESS : await orderAccess(ctx);
 			const result = await mdb().transaction(async (tx) => {
 				const data = await loadOrderOr404(tx, id, true);
 				if (!manage) {
-					if (!isOwnOrder(data.order, ctx, linkedIds)) {
+					if (!isOwnOrder(data.order, ctx, access)) {
 						throw errors.notFound('Bestellung nicht gefunden');
 					}
-					if (!ctx.permissions.has(PERMISSIONS.create)) {
-						throw errors.forbidden(`Berechtigung fehlt: ${PERMISSIONS.create}`);
+					const needed = ownCancelPermission(data.order);
+					if (!ctx.permissions.has(needed)) {
+						throw errors.forbidden(`Berechtigung fehlt: ${needed}`);
 					}
 					if (data.items.some((r) => num(r.delivered_qty) > 0)) {
 						throw errors.conflict(
@@ -427,7 +498,7 @@ export const ordersEndpoints = [
 				metadata: { ...result, hasReason: !!input.reason }
 			});
 			await notifyCustomer(ctx, id, 'cancelled', { quantity: result.quantity, all: result.all });
-			return buildOne(ctx, id, linkedIds);
+			return buildOne(ctx, id, access);
 		}
 	}),
 	defineEndpoint({
@@ -673,7 +744,7 @@ export const ordersEndpoints = [
 				});
 			}
 			if (result.itemsChanged) await notifyCustomer(ctx, id, 'updated');
-			return buildOne(ctx, id, canManage(ctx) ? undefined : await linkedMemberIds(ctx));
+			return buildOne(ctx, id, canManage(ctx) ? undefined : await orderAccess(ctx));
 		}
 	}),
 	defineEndpoint({
@@ -693,9 +764,13 @@ export const ordersEndpoints = [
 			const data = await mdb().transaction((tx) => loadOrderOr404(tx, id));
 			const o = data.order;
 			const invoiceId = str(o.invoice_id);
-			const treasury = await treasuryService();
+			// Gruppen-/Stammesbestellungen haben nie eine Rechnung
+			const billed = String(o.recipient_kind ?? 'member') === 'member';
+			const treasury = billed ? await treasuryService() : null;
 			let invoiceCancelled = false;
-			if (treasury) {
+			if (!billed) {
+				// nichts in der Kasse zu stornieren
+			} else if (treasury) {
 				try {
 					const r = await treasury.upsertOrderInvoice(ctx, {
 						sourceKey: invoiceSourceKey(id),
@@ -730,6 +805,7 @@ export const ordersEndpoints = [
 				target: id,
 				metadata: {
 					number,
+					recipientKind: String(o.recipient_kind ?? 'member'),
 					items: data.items.length,
 					delivered: data.items.reduce((s, r) => s + num(r.delivered_qty), 0),
 					invoiceCancelled

@@ -11,6 +11,7 @@
 	import type { Order, OrderList } from '../schemas';
 	import OrderStatusBadge from './OrderStatusBadge.svelte';
 	import PaymentBadge from './PaymentBadge.svelte';
+	import RecipientName from './RecipientName.svelte';
 	import { BASE, errorText, formatDate } from './helpers';
 
 	const LIMIT = 50;
@@ -124,7 +125,7 @@
 		<Table.Row>
 			<Table.Head>Nummer</Table.Head>
 			<Table.Head>Datum</Table.Head>
-			<Table.Head>Mitglied</Table.Head>
+			<Table.Head>Für</Table.Head>
 			<Table.Head>Positionen</Table.Head>
 			<Table.Head class="text-right">Summe</Table.Head>
 			<Table.Head>Status</Table.Head>
@@ -136,7 +137,7 @@
 		<Table.Row>
 			<Table.Cell class="font-medium whitespace-nowrap">{o.number}</Table.Cell>
 			<Table.Cell class="whitespace-nowrap tabular-nums">{formatDate(o.createdAt)}</Table.Cell>
-			<Table.Cell>{o.member.name}</Table.Cell>
+			<Table.Cell class="max-w-60"><RecipientName recipient={o.recipient} /></Table.Cell>
 			<Table.Cell class="max-w-80">
 				<div class="line-clamp-2" title={itemsText(o)}>{itemsText(o)}</div>
 				{#if o.note}
@@ -150,10 +151,14 @@
 			</Table.Cell>
 			<Table.Cell><OrderStatusBadge status={o.status} /></Table.Cell>
 			<Table.Cell>
-				<PaymentBadge
-					payment={o.payment}
-					pending={!o.payment && o.status !== 'cancelled' && o.totalCents > 0}
-				/>
+				{#if o.recipient.kind === 'member'}
+					<PaymentBadge
+						payment={o.payment}
+						pending={!o.payment && o.status !== 'cancelled' && o.totalCents > 0}
+					/>
+				{:else}
+					<span class="text-xs text-muted-foreground">ohne Rechnung</span>
+				{/if}
 			</Table.Cell>
 			<Table.Cell class="text-right">
 				{#if o.canCancel}

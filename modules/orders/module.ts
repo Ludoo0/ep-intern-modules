@@ -15,7 +15,9 @@ import { subjectExport } from './subject-export';
 import { ordersSearch } from './search';
 import { ordersDashboard } from './dashboard';
 import {
+	LEADER_ROLE_NAME,
 	MANAGER_ROLE_NAME,
+	MATERIAL_ROLE_NAME,
 	NOTIFY_ORDER_CREATED,
 	NOTIFY_STOCK_DEFICIT,
 	OFFICE_KEY,
@@ -24,6 +26,7 @@ import {
 import m0001 from './migrations/0001_init.sql?raw';
 import m0002 from './migrations/0002_digest_state.sql?raw';
 import m0003 from './migrations/0003_fk_indexes.sql?raw';
+import m0004 from './migrations/0004_recipients.sql?raw';
 
 export default defineModule({
 	package: pkg,
@@ -39,7 +42,9 @@ export default defineModule({
 			PERMISSIONS.edit,
 			PERMISSIONS.delete,
 			PERMISSIONS.articles,
-			PERMISSIONS.stock
+			PERMISSIONS.stock,
+			PERMISSIONS.group,
+			PERMISSIONS.stamm
 		],
 		permissionDescriptions: {
 			[PERM_AI]: 'KI-Schreibhilfe für Artikelbeschreibungen nutzen',
@@ -56,7 +61,11 @@ export default defineModule({
 			[PERMISSIONS.articles]:
 				'Artikel pflegen: Titel, Beschreibung, Notizen, Größen, Preise, Nachbestelllinks und Bilder',
 			[PERMISSIONS.stock]:
-				'Lager und Fehlmengen sehen, Bestand korrigieren, beim Lieferanten bestellen, Wareneingang buchen und Lieferantenrechnungen an die Kasse geben'
+				'Lager und Fehlmengen sehen, Bestand korrigieren, beim Lieferanten bestellen, Wareneingang buchen und Lieferantenrechnungen an die Kasse geben',
+			[PERMISSIONS.group]:
+				'Für die selbst geleiteten Gruppen bestellen (ohne Rechnung); Bestellungen dieser Gruppen sehen und stornieren, solange nichts ausgegeben ist',
+			[PERMISSIONS.stamm]:
+				'Für den Stamm bestellen (ohne Rechnung); alle Stammesbestellungen sehen und stornieren, solange nichts ausgegeben ist'
 		},
 		defaultRoleGrants: {
 			Mitglied: [PERMISSIONS.view, PERMISSIONS.create],
@@ -67,8 +76,11 @@ export default defineModule({
 				PERMISSIONS.edit,
 				PERMISSIONS.delete,
 				PERMISSIONS.articles,
-				PERMISSIONS.stock
-			]
+				PERMISSIONS.stock,
+				PERMISSIONS.stamm
+			],
+			[LEADER_ROLE_NAME]: [PERMISSIONS.view, PERMISSIONS.group],
+			[MATERIAL_ROLE_NAME]: [PERMISSIONS.view, PERMISSIONS.stamm]
 		},
 		offices: [
 			{
@@ -81,7 +93,8 @@ export default defineModule({
 					{
 						key: NOTIFY_ORDER_CREATED,
 						label: 'Neue Bestellung',
-						description: 'Ein Mitglied hat Artikel bestellt'
+						description:
+							'Jemand hat Artikel bestellt (für ein Mitglied, eine Gruppe oder den Stamm)'
 					},
 					{
 						key: NOTIFY_STOCK_DEFICIT,
@@ -104,7 +117,8 @@ export default defineModule({
 	migrations: [
 		{ name: '0001_init', sql: m0001 },
 		{ name: '0002_digest_state', sql: m0002 },
-		{ name: '0003_fk_indexes', sql: m0003 }
+		{ name: '0003_fk_indexes', sql: m0003 },
+		{ name: '0004_recipients', sql: m0004 }
 	],
 	resetAreas,
 	resetUsers,

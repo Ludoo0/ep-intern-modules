@@ -4,7 +4,14 @@
 import { ApiClientError } from '$lib/sdk/client';
 import { formatEuro } from '$lib/components/layout/money';
 import { formatDateDe } from '$lib/sdk/dates';
-import { BASE_PATH, MAX_QUANTITY, type Article } from '../schemas';
+import {
+	BASE_PATH,
+	MAX_QUANTITY,
+	type Article,
+	type Order,
+	type RecipientKind,
+	type RecipientOptions
+} from '../schemas';
 
 export const BASE = BASE_PATH;
 
@@ -14,6 +21,34 @@ export function formatPriceRange(min: number, max: number): string {
 	const hi = Number.isFinite(max) ? Math.max(0, Math.round(max)) : lo;
 	if (hi <= lo) return formatEuro(lo);
 	return `${formatEuro(lo)} – ${formatEuro(hi)}`;
+}
+
+/** Empfänger als Text: „Kira Muster“, „Gruppe Wölflinge“, „Stamm“ */
+export function recipientLabel(r: Order['recipient']): string {
+	return r.kind === 'group' ? `Gruppe ${r.name}` : r.kind === 'stamm' ? 'Stamm' : r.name;
+}
+
+/** Auswahl „Bestellen für“ im Warenkorb: `member:<id>`, `group:<id>` bzw. `stamm` */
+export function recipientChoices(o: RecipientOptions): { value: string; label: string }[] {
+	return [
+		...o.members.map((m) => ({ value: `member:${m.id}`, label: m.name })),
+		...o.groups.map((g) => ({ value: `group:${g.id}`, label: `Gruppe ${g.name}` })),
+		...(o.stamm ? [{ value: 'stamm', label: 'Stamm (Stammesmaterial)' }] : [])
+	];
+}
+
+/** Auswahlwert → Teil des Bodys von `POST /orders` (`null` = ungültig) */
+export function recipientPayload(
+	value: string | null
+): { recipientKind: RecipientKind; memberId?: string; groupId?: string } | null {
+	if (!value) return null;
+	if (value === 'stamm') return { recipientKind: 'stamm' };
+	const [kind, ...rest] = value.split(':');
+	const id = rest.join(':');
+	if (!id) return null;
+	if (kind === 'member') return { recipientKind: 'member', memberId: id };
+	if (kind === 'group') return { recipientKind: 'group', groupId: id };
+	return null;
 }
 
 /** ISO-Zeitstempel oder `JJJJ-MM-TT` → `TT.MM.JJJJ` */

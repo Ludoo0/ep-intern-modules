@@ -39,6 +39,11 @@ export async function pushInvoice(
 		const [data] = await mdb().transaction((tx) => loadOrders(tx, [orderId]));
 		if (!data) return { ...pending, pending: false };
 		const o = data.order;
+		// Gruppen- und Stammesbestellungen: nie eine Rechnung
+		if (String(o.recipient_kind ?? 'member') !== 'member') {
+			await markSynced(orderId, null, null);
+			return { pending: false, mailed: false, invoiceId: null, number: null };
+		}
 		const invoiceId = str(o.invoice_id);
 		const lines: OrderInvoiceLine[] = data.items
 			.map((r) => {
@@ -161,7 +166,11 @@ export async function syncTreasury(ctx: RequestContext): Promise<string> {
 	const treasury = await treasuryService();
 	if (!treasury) return 'Kasse nicht aktiv – nichts abgeglichen';
 	const dirty = await mdb().transaction((tx) =>
-		rows(tx, sql`SELECT id FROM orders WHERE treasury_dirty = true ORDER BY created_at LIMIT 500`)
+		rows(
+			tx,
+			sql`SELECT id FROM orders WHERE treasury_dirty = true AND recipient_kind = 'member'
+				ORDER BY created_at LIMIT 500`
+		)
 	);
 	let ok = 0;
 	let failed = 0;

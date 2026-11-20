@@ -7,7 +7,13 @@ import { sql } from 'drizzle-orm';
 import { formatEuro } from '$lib/components/layout/money';
 import { core, type RequestContext } from '$lib/sdk/server';
 import type { OfficeNotification } from '$modules/offices/contract';
-import { MODULE_ID, NOTIFY_ORDER_CREATED, NOTIFY_STOCK_DEFICIT, OFFICE_KEY } from './schemas';
+import {
+	MODULE_ID,
+	NOTIFY_ORDER_CREATED,
+	NOTIFY_STOCK_DEFICIT,
+	OFFICE_KEY,
+	type RecipientKind
+} from './schemas';
 import { mdb, officesService, rows } from './db';
 import { loadStock } from './orders.service';
 import { lineDescription } from './stock';
@@ -33,28 +39,37 @@ async function send(ctx: RequestContext | null, items: OfficeNotification[]): Pr
 
 export interface OrderCreatedInfo {
 	number: string;
+	/** Standard `member`; Gruppe/Stamm ohne Rechnung */
+	recipientKind?: RecipientKind;
+	/** Name des Empfängers (Mitglied, Gruppe oder „Stamm“) */
 	memberName: string;
 	items: { articleTitle: string; variantLabel: string; quantity: number; totalCents: number }[];
 	totalCents: number;
 }
 
+/** „Gruppe Wölflinge“, „Stamm“ bzw. der Mitgliedsname */
+function recipientText(info: OrderCreatedInfo): string {
+	return info.recipientKind === 'group' ? `Gruppe ${info.memberName}` : info.memberName;
+}
+
 export function orderCreatedNotification(info: OrderCreatedInfo): OfficeNotification {
 	const lines = [
 		`Bestellung: ${info.number}`,
-		`Für: ${info.memberName}`,
+		`Für: ${recipientText(info)}`,
 		'',
 		...info.items.map(
 			(i) =>
 				`• ${lineDescription(i.articleTitle, i.variantLabel, i.quantity)}: ${formatEuro(i.totalCents)}`
 		),
 		'',
-		`Summe: ${formatEuro(info.totalCents)}`
+		`Summe: ${formatEuro(info.totalCents)}`,
+		...(info.recipientKind && info.recipientKind !== 'member' ? ['(ohne Rechnung)'] : [])
 	];
 	return {
 		module: MODULE_ID,
 		office: OFFICE_KEY,
 		event: NOTIFY_ORDER_CREATED,
-		subject: clip(`Neue Bestellung ${info.number}: ${info.memberName}`, 150),
+		subject: clip(`Neue Bestellung ${info.number}: ${recipientText(info)}`, 150),
 		text: clip(lines.join('\n'), 4000),
 		link: ORDERS_LINK
 	};

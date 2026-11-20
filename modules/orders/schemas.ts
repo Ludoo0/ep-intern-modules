@@ -26,8 +26,16 @@ export const PERMISSIONS = {
 	/** Bestellungen ganz löschen (Rechnung in der Kasse wird storniert) */
 	delete: 'orders.order.delete',
 	articles: 'orders.article.manage',
-	stock: 'orders.stock.manage'
+	stock: 'orders.stock.manage',
+	/** Für selbst geleitete Gruppen bestellen (ohne Rechnung), deren Bestellungen sehen/stornieren */
+	group: 'orders.order.group',
+	/** Für den Stamm bestellen (ohne Rechnung), alle Stammesbestellungen sehen/stornieren */
+	stamm: 'orders.order.stamm'
 } as const;
+
+/** Rollen anderer Module (per `default:<Name>` gefunden), die Gruppen- bzw. Stammesbestellungen bekommen */
+export const LEADER_ROLE_NAME = 'Gruppenleitung';
+export const MATERIAL_ROLE_NAME = 'Materialwart*in';
 
 export const MAX_TITLE = 150;
 export const MAX_DESCRIPTION = 5000;
@@ -230,22 +238,43 @@ export const orderItemInput = z.object({
 	quantity
 });
 
-export const orderCreateInput = z.object({
-	memberId: z.string().min(1).max(64),
-	items: z
-		.array(orderItemInput)
-		.min(1, 'Mindestens ein Artikel')
-		.max(MAX_ORDER_ITEMS, `Höchstens ${MAX_ORDER_ITEMS} Positionen`)
-		.superRefine((list, c) => {
-			const seen = new Set<string>();
-			list.forEach((it, i) => {
-				if (seen.has(it.variantId))
-					c.addIssue({ code: 'custom', message: 'Artikel doppelt', path: [i, 'variantId'] });
-				seen.add(it.variantId);
-			});
-		}),
-	note: optionalText(MAX_NOTE)
-});
+/** Empfänger einer Bestellung: Mitglied (mit Rechnung), Gruppe oder Stamm (ohne Rechnung) */
+export const RECIPIENT_KINDS = ['member', 'group', 'stamm'] as const;
+export type RecipientKind = (typeof RECIPIENT_KINDS)[number];
+export const RECIPIENT_KIND_LABELS: Record<RecipientKind, string> = {
+	member: 'Mitglied',
+	group: 'Gruppe',
+	stamm: 'Stamm'
+};
+/** Namens-Snapshot einer Stammesbestellung */
+export const STAMM_NAME = 'Stamm';
+
+export const orderCreateInput = z
+	.object({
+		/** Standard `member` (rückwärtskompatibel: nur `memberId`) */
+		recipientKind: z.enum(RECIPIENT_KINDS).default('member'),
+		memberId: z.string().min(1).max(64).optional(),
+		groupId: z.string().min(1).max(64).optional(),
+		items: z
+			.array(orderItemInput)
+			.min(1, 'Mindestens ein Artikel')
+			.max(MAX_ORDER_ITEMS, `Höchstens ${MAX_ORDER_ITEMS} Positionen`)
+			.superRefine((list, c) => {
+				const seen = new Set<string>();
+				list.forEach((it, i) => {
+					if (seen.has(it.variantId))
+						c.addIssue({ code: 'custom', message: 'Artikel doppelt', path: [i, 'variantId'] });
+					seen.add(it.variantId);
+				});
+			}),
+		note: optionalText(MAX_NOTE)
+	})
+	.superRefine((v, c) => {
+		if (v.recipientKind === 'member' && !v.memberId)
+			c.addIssue({ code: 'custom', message: 'Bitte ein Mitglied wählen', path: ['memberId'] });
+		if (v.recipientKind === 'group' && !v.groupId)
+			c.addIssue({ code: 'custom', message: 'Bitte eine Gruppe wählen', path: ['groupId'] });
+	});
 export type OrderCreateInput = z.input<typeof orderCreateInput>;
 
 /** Mengen je Position (Storno bzw. Ausgabe); 0 = nichts */
@@ -380,7 +409,10 @@ export interface OrderItem {
 export interface Order {
 	id: string;
 	number: string;
-	member: { id: string; name: string };
+	/** Empfänger: Mitglied (mit Rechnung), Gruppe oder Stamm (`id` = null, ohne Rechnung) */
+	recipient: { kind: RecipientKind; id: string | null; name: string };
+	/** Nur bei `recipient.kind = 'member'` */
+	member: { id: string; name: string } | null;
 	orderedBy: { id: string; name: string } | null;
 	note: string | null;
 	status: OrderStatus;
@@ -423,6 +455,16 @@ export interface OrderCreated {
 export interface MemberOption {
 	id: string;
 	name: string;
+}
+
+/** GET `/my/recipients`: wofür die*der Aufrufende im Warenkorb bestellen darf */
+export interface RecipientOptions {
+	/** Verknüpfte Mitglieder (Recht `create`) */
+	members: MemberOption[];
+	/** Selbst geleitete Gruppen (Recht `group`) */
+	groups: MemberOption[];
+	/** Für den Stamm (Recht `stamm` oder `manage`) */
+	stamm: boolean;
 }
 
 // --- Lager -----------------------------------------------------------------------

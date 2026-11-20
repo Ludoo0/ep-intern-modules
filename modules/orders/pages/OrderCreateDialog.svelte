@@ -1,5 +1,6 @@
 <script lang="ts">
-	// Bestellung für ein beliebiges Mitglied anlegen (Kämmerer*in): Mitglied suchen, Positionen wählen, bestellen.
+	// Bestellung anlegen (Kämmerer*in): für ein beliebiges Mitglied (Suche, mit Rechnung), eine Gruppe oder den
+	// Stamm (ohne Rechnung); Positionen wählen, bestellen.
 	import Plus from '@lucide/svelte/icons/plus';
 	import Search from '@lucide/svelte/icons/search';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -18,8 +19,11 @@
 		MAX_QUANTITY,
 		orderCreateInput,
 		type Article,
+		RECIPIENT_KIND_LABELS,
+		RECIPIENT_KINDS,
 		type MemberOption,
-		type OrderCreated
+		type OrderCreated,
+		type RecipientKind
 	} from '../schemas';
 	import { API, errorMessage, fieldErrorsFrom, issuesToErrors, itemName } from './admin-helpers';
 
@@ -39,7 +43,13 @@
 
 	const newRow = (): Row => ({ key: crypto.randomUUID(), variantId: null, quantity: 1 });
 
+	const kindOptions = RECIPIENT_KINDS.map((k) => ({ value: k, label: RECIPIENT_KIND_LABELS[k] }));
+	let kind = $state<RecipientKind>('member');
 	let member = $state<MemberOption | null>(null);
+	let groupId = $state<string | null>(null);
+	let groups = $state<MemberOption[] | null>(null);
+	let groupsError = $state('');
+	const groupOptions = $derived((groups ?? []).map((g) => ({ value: g.id, label: g.name })));
 	let note = $state('');
 	let rows = $state<Row[]>([newRow()]);
 	let articles = $state<Article[] | null>(null);
@@ -51,7 +61,9 @@
 	let wasOpen = false;
 	$effect(() => {
 		if (open && !wasOpen) {
+			kind = 'member';
 			member = null;
+			groupId = null;
 			note = '';
 			rows = [newRow()];
 			search = '';
@@ -70,6 +82,23 @@
 		} catch (e) {
 			articlesError = errorMessage(e, 'Artikel konnten nicht geladen werden');
 		}
+	}
+
+	async function loadGroups() {
+		groupsError = '';
+		try {
+			groups = await apiFetch<MemberOption[]>(`${API}/groups`);
+		} catch (e) {
+			groupsError = errorMessage(e, 'Gruppen konnten nicht geladen werden');
+		}
+	}
+
+	function setKind(v: string | null) {
+		kind = (v as RecipientKind | null) ?? 'member';
+		errors = Object.fromEntries(
+			Object.entries(errors).filter(([k]) => k !== 'memberId' && k !== 'groupId')
+		);
+		if (kind === 'group' && !groups) void loadGroups();
 	}
 
 	// --- Mitglied suchen -----------------------------------------------------------
@@ -145,7 +174,9 @@
 	async function submit(e: SubmitEvent) {
 		e.preventDefault();
 		const payload = {
-			memberId: member?.id ?? '',
+			recipientKind: kind,
+			...(kind === 'member' ? { memberId: member?.id } : {}),
+			...(kind === 'group' ? { groupId: groupId ?? undefined } : {}),
 			items: rows.map((r) => ({ variantId: r.variantId ?? '', quantity: r.quantity })),
 			note: note.trim() || null
 		};
@@ -153,6 +184,7 @@
 		if (!parsed.success) {
 			errors = issuesToErrors(parsed.error.issues);
 			if (errors.memberId) errors.memberId = 'Bitte wähle das Mitglied, für das du bestellst.';
+			if (errors.groupId) errors.groupId = 'Bitte wähle die Gruppe, für die du bestellst.';
 			for (const [k, v] of Object.entries(errors))
 				if (/^items\.\d+\.variantId$/.test(k) && v !== 'Artikel doppelt')
 					errors[k] = 'Bitte wähle einen Artikel.';
@@ -168,7 +200,9 @@
 			});
 			const nr = created.order.number;
 			const inv = created.order.invoiceNumber;
-			if (inv && created.mailed)
+			if (created.order.recipient.kind !== 'member')
+				toast.success(`Bestellung ${nr} angelegt (ohne Rechnung)`);
+			else if (inv && created.mailed)
 				toast.success(`Bestellung ${nr} angelegt, Rechnung ${inv} per E-Mail verschickt`);
 			else if (inv)
 				toast.success(`Bestellung ${nr} angelegt, Rechnung ${inv} erstellt`, {
@@ -193,88 +227,123 @@
 		<Dialog.Header>
 			<Dialog.Title>Bestellung anlegen</Dialog.Title>
 			<Dialog.Description>
-				Für ein beliebiges Mitglied bestellen. Die Rechnung geht sofort per E-Mail raus.
+				Für ein Mitglied (die Rechnung geht sofort per E-Mail raus), eine Gruppe oder den Stamm
+				(ohne Rechnung) bestellen.
 			</Dialog.Description>
 		</Dialog.Header>
 		<form class="space-y-4" onsubmit={submit} novalidate>
-			<FormField label="Für Mitglied *" id="oc-member" error={errors.memberId}>
-				{#if member}
-					<div class="flex min-h-9 items-center justify-between gap-2 rounded-md border px-3 py-1">
-						<span class="truncate text-sm font-medium">{member.name}</span>
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
+			<FormField label="Bestellen für *" id="oc-kind">
+				<SelectField
+					id="oc-kind"
+					label="Bestellen für"
+					options={kindOptions}
+					value={kind}
+					disabled={busy}
+					onchange={setKind}
+				/>
+			</FormField>
+
+			{#if kind === 'group'}
+				<FormField label="Gruppe *" id="oc-group" error={errors.groupId}>
+					{#if groupsError}
+						<p class="text-sm text-destructive" role="alert">
+							{groupsError}
+							<Button size="sm" variant="link" onclick={loadGroups}>Erneut versuchen</Button>
+						</p>
+					{:else}
+						<SelectField
+							id="oc-group"
+							label="Gruppe"
+							options={groupOptions}
+							bind:value={groupId}
+							placeholder={groups ? 'Gruppe wählen …' : 'Lädt …'}
 							disabled={busy}
-							onclick={() => {
-								member = null;
-								queueMicrotask(() => document.getElementById('oc-member')?.focus());
-							}}
+							invalid={!!errors.groupId}
+						/>
+					{/if}
+				</FormField>
+			{:else if kind === 'member'}
+				<FormField label="Für Mitglied *" id="oc-member" error={errors.memberId}>
+					{#if member}
+						<div
+							class="flex min-h-9 items-center justify-between gap-2 rounded-md border px-3 py-1"
 						>
-							Ändern
-						</Button>
-					</div>
-				{:else}
-					<div class="space-y-1.5">
-						<div class="relative">
-							<Search
-								class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
-								aria-hidden="true"
-							/>
-							<Input
-								id="oc-member"
-								class="pl-8"
-								placeholder="Name suchen (ab 2 Zeichen) …"
-								aria-label="Mitglied suchen"
-								autocomplete="off"
-								aria-invalid={!!errors.memberId}
-								bind:value={search}
-								oninput={onsearch}
-							/>
-							{#if search}
-								<Button
-									type="button"
-									variant="ghost"
-									size="icon-sm"
-									class="absolute top-1/2 right-1 -translate-y-1/2"
-									aria-label="Suche leeren"
-									onclick={() => {
-										search = '';
-										onsearch();
-									}}
-								>
-									<X />
-								</Button>
-							{/if}
+							<span class="truncate text-sm font-medium">{member.name}</span>
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								disabled={busy}
+								onclick={() => {
+									member = null;
+									queueMicrotask(() => document.getElementById('oc-member')?.focus());
+								}}
+							>
+								Ändern
+							</Button>
 						</div>
-						{#if search.trim().length >= 2}
-							<div class="rounded-md border" aria-live="polite">
-								{#if searching}
-									<p class="p-2 text-xs text-muted-foreground">Sucht …</p>
-								{:else if searchError}
-									<p class="p-2 text-xs text-destructive">{searchError}</p>
-								{:else if !results.length}
-									<p class="p-2 text-xs text-muted-foreground">Kein Mitglied gefunden.</p>
-								{:else}
-									<ul class="max-h-48 overflow-y-auto py-1">
-										{#each results as m (m.id)}
-											<li>
-												<button
-													type="button"
-													class="w-full px-3 py-2 text-left text-sm hover:bg-muted focus-visible:bg-muted focus-visible:-outline-offset-2"
-													onclick={() => choose(m)}
-												>
-													{m.name}
-												</button>
-											</li>
-										{/each}
-									</ul>
+					{:else}
+						<div class="space-y-1.5">
+							<div class="relative">
+								<Search
+									class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+									aria-hidden="true"
+								/>
+								<Input
+									id="oc-member"
+									class="pl-8"
+									placeholder="Name suchen (ab 2 Zeichen) …"
+									aria-label="Mitglied suchen"
+									autocomplete="off"
+									aria-invalid={!!errors.memberId}
+									bind:value={search}
+									oninput={onsearch}
+								/>
+								{#if search}
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-sm"
+										class="absolute top-1/2 right-1 -translate-y-1/2"
+										aria-label="Suche leeren"
+										onclick={() => {
+											search = '';
+											onsearch();
+										}}
+									>
+										<X />
+									</Button>
 								{/if}
 							</div>
-						{/if}
-					</div>
-				{/if}
-			</FormField>
+							{#if search.trim().length >= 2}
+								<div class="rounded-md border" aria-live="polite">
+									{#if searching}
+										<p class="p-2 text-xs text-muted-foreground">Sucht …</p>
+									{:else if searchError}
+										<p class="p-2 text-xs text-destructive">{searchError}</p>
+									{:else if !results.length}
+										<p class="p-2 text-xs text-muted-foreground">Kein Mitglied gefunden.</p>
+									{:else}
+										<ul class="max-h-48 overflow-y-auto py-1">
+											{#each results as m (m.id)}
+												<li>
+													<button
+														type="button"
+														class="w-full px-3 py-2 text-left text-sm hover:bg-muted focus-visible:bg-muted focus-visible:-outline-offset-2"
+														onclick={() => choose(m)}
+													>
+														{m.name}
+													</button>
+												</li>
+											{/each}
+										</ul>
+									{/if}
+								</div>
+							{/if}
+						</div>
+					{/if}
+				</FormField>
+			{/if}
 
 			<fieldset class="space-y-2">
 				<legend class="text-sm font-medium">Artikel *</legend>

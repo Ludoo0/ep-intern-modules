@@ -2,8 +2,8 @@
 	"schema": 1,
 	"id": "orders",
 	"name": "Bestellungen",
-	"description": "Stammesartikel bestellen (Halstuch, Liederbuch …) mit Rechnung über die Kasse, Lager und Einkauf für die*den Kämmerer*in",
-	"version": "1.2.0",
+	"description": "Stammesartikel bestellen (Halstuch, Liederbuch …) für Mitglieder mit Rechnung über die Kasse, für Gruppen und den Stamm ohne Rechnung, Lager und Einkauf für die*den Kämmerer*in",
+	"version": "1.3.0",
 	"core": ">=2.0.0-0 <3.0.0",
 	"dependencies": {
 		"members": {
@@ -24,7 +24,9 @@
 		"orders.order.create",
 		"orders.order.delete",
 		"orders.order.edit",
+		"orders.order.group",
 		"orders.order.manage",
+		"orders.order.stamm",
 		"orders.order.view",
 		"orders.stock.manage"
 	],

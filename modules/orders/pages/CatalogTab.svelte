@@ -38,7 +38,12 @@
 	} = $props();
 
 	const permissions = $derived((page.data.permissions ?? []) as string[]);
-	const canCreate = $derived(can(permissions, PERMISSIONS.create));
+	/** Bestellen im Warenkorb: für verknüpfte Mitglieder, geleitete Gruppen oder den Stamm */
+	const canOrder = $derived(
+		can(permissions, PERMISSIONS.create) ||
+			can(permissions, PERMISSIONS.group) ||
+			can(permissions, PERMISSIONS.stamm)
+	);
 	const canManage = $derived(can(permissions, PERMISSIONS.manage));
 
 	const desktop = new MediaQuery('(min-width: 1024px)', false);
@@ -48,7 +53,7 @@
 	let error = $state('');
 
 	let cart = $state<CartItem[]>([]);
-	let memberId = $state<string | null>(null);
+	let recipient = $state<string | null>(null);
 	let note = $state('');
 	let cartOpen = $state(false);
 
@@ -128,9 +133,9 @@
 {#snippet cartPanel()}
 	<CartPanel
 		bind:cart
-		bind:memberId
+		bind:recipient
 		bind:note
-		{canCreate}
+		{canOrder}
 		{canManage}
 		oncartchange={(c) => saveCart(c)}
 		onordered={ordered}
@@ -225,11 +230,6 @@
 
 {#if selected}
 	{#key detailKey}
-		<ArticleDetailDialog
-			bind:open={detailOpen}
-			article={selected}
-			canOrder={canCreate}
-			onadd={add}
-		/>
+		<ArticleDetailDialog bind:open={detailOpen} article={selected} {canOrder} onadd={add} />
 	{/key}
 {/if}

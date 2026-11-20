@@ -1,5 +1,5 @@
 /**
- * Bestellungen von Mitgliedern: Laden (in der Transaktion), Aufbereiten (danach: Namen, Zahlstand),
+ * Bestellungen (Mitglieder, Gruppen, Stamm): Laden (in der Transaktion), Aufbereiten (danach: Namen, Zahlstand),
  * Lagerübersicht und Zugriffshilfen. Dienste/Core-Aufrufe nur AUSSERHALB offener Transaktionen.
  */
 import { sql, type SQL } from 'drizzle-orm';
@@ -10,6 +10,7 @@ import {
 	type Order,
 	type OrderItem,
 	type OrderPayment,
+	type RecipientKind,
 	type StockRow
 } from './schemas';
 import {
@@ -80,11 +81,75 @@ export const itemQty = (r: Row) => ({
 	cancelledQty: num(r.cancelled_qty)
 });
 
-/** Darf die*der Aufrufende diese Bestellung sehen (manage, selbst bestellt oder verknüpftes Mitglied)? */
-export function isOwnOrder(order: Row, ctx: RequestContext, linkedIds: Set<string>): boolean {
-	return (
-		(!!ctx.userId && order.ordered_by === ctx.userId) || linkedIds.has(String(order.member_id))
-	);
+/**
+ * Wozu die*der Aufrufende Zugang hat (ohne `manage`): verknüpfte Mitglieder, selbst geleitete Gruppen
+ * (nur mit Recht `group`) und Stammesbestellungen (Recht `stamm`). Dienst-Fehler → leer.
+ */
+export interface OrderAccess {
+	linkedIds: Set<string>;
+	ledGroupIds: Set<string>;
+	stamm: boolean;
+}
+
+export const NO_ACCESS: OrderAccess = {
+	linkedIds: new Set(),
+	ledGroupIds: new Set(),
+	stamm: false
+};
+
+/** Selbst geleitete Gruppen (Recht `group`; ohne Konto/Leitung oder bei Fehlern leer) */
+export async function ledGroups(ctx: RequestContext): Promise<MemberOption[]> {
+	if (!ctx.userId || !ctx.permissions.has(PERMISSIONS.group)) return [];
+	try {
+		const list = await (await membersService()).listLedGroups(ctx);
+		return list.map((g) => ({ id: g.id, name: g.name }));
+	} catch {
+		return [];
+	}
+}
+
+export async function orderAccess(ctx: RequestContext): Promise<OrderAccess> {
+	const [linkedIds, groups] = await Promise.all([linkedMemberIds(ctx), ledGroups(ctx)]);
+	return {
+		linkedIds,
+		ledGroupIds: new Set(groups.map((g) => g.id)),
+		stamm: ctx.permissions.has(PERMISSIONS.stamm)
+	};
+}
+
+/** Darf die*der Aufrufende diese Bestellung sehen (selbst bestellt, verknüpftes Mitglied, geleitete Gruppe, Stamm)? */
+export function isOwnOrder(order: Row, ctx: RequestContext, access: OrderAccess): boolean {
+	if (!!ctx.userId && order.ordered_by === ctx.userId) return true;
+	const kind = String(order.recipient_kind ?? 'member');
+	if (kind === 'group') return access.ledGroupIds.has(String(order.group_id));
+	if (kind === 'stamm') return access.stamm;
+	return access.linkedIds.has(String(order.member_id));
+}
+
+/** SQL-Filter „eigene“ Bestellungen (gleiche Regeln wie `isOwnOrder`), `alias` = Tabellen-Alias von `orders` */
+export function ownOrdersSql(ctx: RequestContext, access: OrderAccess, alias: string): SQL {
+	const a = sql.raw(alias);
+	const conds: SQL[] = [sql`${a}.ordered_by = ${ctx.userId}`];
+	const linked = [...access.linkedIds];
+	if (linked.length) {
+		conds.push(sql`(${a}.recipient_kind = 'member' AND ${a}.member_id IN (${idList(linked)}))`);
+	}
+	const groups = [...access.ledGroupIds];
+	if (groups.length) {
+		conds.push(sql`(${a}.recipient_kind = 'group' AND ${a}.group_id IN (${idList(groups)}))`);
+	}
+	if (access.stamm) conds.push(sql`${a}.recipient_kind = 'stamm'`);
+	return sql`(${sql.join(conds, sql` OR `)})`;
+}
+
+/** Recht zum Selbst-Stornieren je Empfängerart (Mitglied → create, Gruppe → group, Stamm → stamm) */
+export function ownCancelPermission(order: Row): string {
+	const kind = String(order.recipient_kind ?? 'member');
+	return kind === 'group'
+		? PERMISSIONS.group
+		: kind === 'stamm'
+			? PERMISSIONS.stamm
+			: PERMISSIONS.create;
 }
 
 export const canManage = (ctx: RequestContext) => ctx.permissions.has(PERMISSIONS.manage);
@@ -117,19 +182,15 @@ export async function linkedMemberOptions(ctx: RequestContext): Promise<MemberOp
 		}));
 }
 
-/** Darf stornieren? eigene (Recht create) solange nichts ausgegeben; manage: offene Mengen */
-export function canCancelOrder(
-	data: OrderData,
-	ctx: RequestContext,
-	linkedIds: Set<string>
-): boolean {
+/** Darf stornieren? eigene (Recht je Empfängerart) solange nichts ausgegeben; manage: offene Mengen */
+export function canCancelOrder(data: OrderData, ctx: RequestContext, access: OrderAccess): boolean {
 	const qty = data.items.map(itemQty);
 	const status = orderStatus(qty, isoOrNull(data.order.cancelled_at));
 	const open = qty.reduce((s, q) => s + openQty(q), 0);
 	if (status === 'cancelled' || open === 0) return false;
 	if (canManage(ctx)) return true;
-	if (!ctx.permissions.has(PERMISSIONS.create)) return false;
-	if (!isOwnOrder(data.order, ctx, linkedIds)) return false;
+	if (!ctx.permissions.has(ownCancelPermission(data.order))) return false;
+	if (!isOwnOrder(data.order, ctx, access)) return false;
 	return qty.every((q) => q.deliveredQty === 0);
 }
 
@@ -137,10 +198,10 @@ export function canCancelOrder(
 export async function buildOrders(
 	ctx: RequestContext,
 	list: OrderData[],
-	opts: { manage: boolean; linkedIds?: Set<string> }
+	opts: { manage: boolean; access?: OrderAccess }
 ): Promise<Order[]> {
 	if (!list.length) return [];
-	const linkedIds = opts.linkedIds ?? new Set<string>();
+	const access = opts.access ?? NO_ACCESS;
 	const names = await userNames(
 		ctx,
 		list.map((d) => str(d.order.ordered_by))
@@ -192,10 +253,15 @@ export async function buildOrders(
 		});
 		const orderedBy = str(o.ordered_by);
 		const invoiceId = str(o.invoice_id);
+		const kind = (String(o.recipient_kind ?? 'member') as RecipientKind) || 'member';
+		const recipientId =
+			kind === 'member' ? str(o.member_id) : kind === 'group' ? str(o.group_id) : null;
+		const name = String(o.member_name);
 		return {
 			id: String(o.id),
 			number: String(o.number),
-			member: { id: String(o.member_id), name: String(o.member_name) },
+			recipient: { kind, id: recipientId, name },
+			member: kind === 'member' ? { id: String(o.member_id), name } : null,
 			orderedBy: orderedBy ? { id: orderedBy, name: names.get(orderedBy) ?? 'Unbekannt' } : null,
 			note: str(o.note),
 			status: orderStatus(items, isoOrNull(o.cancelled_at)),
@@ -203,7 +269,7 @@ export async function buildOrders(
 			totalCents: items.reduce((s, i) => s + i.totalCents, 0),
 			invoiceNumber: str(o.invoice_number),
 			payment: invoiceId ? (payments[invoiceId] ?? null) : null,
-			canCancel: canCancelOrder(d, ctx, linkedIds),
+			canCancel: canCancelOrder(d, ctx, access),
 			canEdit: ctx.permissions.has(PERMISSIONS.edit),
 			canDelete: ctx.permissions.has(PERMISSIONS.delete),
 			createdAt: iso(o.created_at),

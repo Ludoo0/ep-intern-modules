@@ -28,12 +28,17 @@ export async function notifyCustomer(
 				: await mdb().transaction((tx) =>
 						rows(
 							tx,
-							sql`SELECT number, member_id, member_name, ordered_by FROM orders WHERE id = ${orderId}`
+							sql`SELECT number, recipient_kind, member_id, member_name, ordered_by
+								FROM orders WHERE id = ${orderId}`
 						)
 					);
 			if (!order) return;
-			const memberId = String(order.member_id);
-			const linked = (await (await membersService()).listLinkedUserIds([memberId]))[memberId] ?? [];
+			// Gruppen-/Stammesbestellung: kein Mitglied, keine Rechnung → nur die bestellende Person
+			const billed = String(order.recipient_kind ?? 'member') === 'member';
+			const memberId = billed ? String(order.member_id) : null;
+			const linked = memberId
+				? ((await (await membersService()).listLinkedUserIds([memberId]))[memberId] ?? [])
+				: [];
 			const allowed = new Set(await core.permissions.usersWith(PERMISSIONS.view));
 			const userIds = [
 				...new Set([...(order.ordered_by ? [String(order.ordered_by)] : []), ...linked])
@@ -46,17 +51,17 @@ export async function notifyCustomer(
 				kind === 'created'
 					? {
 							title: `Bestellung ${number} für ${name}`,
-							body: `Für ${name} wurde die Bestellung ${number} angelegt. Die Rechnung kommt per E-Mail.`
+							body: `Für ${name} wurde die Bestellung ${number} angelegt.${billed ? ' Die Rechnung kommt per E-Mail.' : ''}`
 						}
 					: kind === 'updated'
 						? {
 								title: `Bestellung ${number} geändert`,
-								body: `Die Bestellung ${number} für ${name} wurde geändert. Eine angepasste Rechnung kommt gegebenenfalls per E-Mail.`
+								body: `Die Bestellung ${number} für ${name} wurde geändert.${billed ? ' Eine angepasste Rechnung kommt gegebenenfalls per E-Mail.' : ''}`
 							}
 						: kind === 'deleted'
 							? {
 									title: `Bestellung ${number} gelöscht`,
-									body: `Die Bestellung ${number} für ${name} wurde gelöscht. Eine bereits verschickte Rechnung wurde storniert.`
+									body: `Die Bestellung ${number} für ${name} wurde gelöscht.${billed ? ' Eine bereits verschickte Rechnung wurde storniert.' : ''}`
 								}
 							: kind === 'handed-out'
 								? {

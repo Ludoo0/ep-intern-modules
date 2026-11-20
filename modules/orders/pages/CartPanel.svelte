@@ -16,8 +16,8 @@
 		MAX_NOTE,
 		MAX_QUANTITY,
 		orderCreateInput,
-		type MemberOption,
-		type OrderCreated
+		type OrderCreated,
+		type RecipientOptions
 	} from '../schemas';
 	import {
 		BASE,
@@ -25,25 +25,28 @@
 		cartTotal,
 		errorText,
 		itemLabel,
+		recipientChoices,
+		recipientPayload,
 		setCartQuantity,
 		type CartItem
 	} from './helpers';
 
 	let {
 		cart = $bindable([]),
-		memberId = $bindable(null),
+		recipient = $bindable(null),
 		note = $bindable(''),
-		canCreate,
+		canOrder,
 		canManage,
 		oncartchange,
 		onordered,
 		onmanage
 	}: {
 		cart?: CartItem[];
-		memberId?: string | null;
+		/** Auswahl „Bestellen für“: `member:<id>`, `group:<id>` oder `stamm` */
+		recipient?: string | null;
 		note?: string;
-		/** Für verknüpfte Mitglieder bestellen */
-		canCreate: boolean;
+		/** Für verknüpfte Mitglieder, geleitete Gruppen oder den Stamm bestellen */
+		canOrder: boolean;
 		/** Kämmerer*in: Hinweis auf „Bestellung anlegen“ im Tab Bestellungen */
 		canManage: boolean;
 		/** Warenkorb geändert (zum Speichern) */
@@ -53,24 +56,24 @@
 		onmanage?: () => void;
 	} = $props();
 
-	const canOrder = $derived(canCreate);
-
-	let myMembers = $state<MemberOption[]>([]);
+	let options = $state<RecipientOptions>({ members: [], groups: [], stamm: false });
 	let membersLoading = $state(true);
 	let membersError = $state('');
 
-	const memberOptions = $derived(myMembers.map((m) => ({ value: m.id, label: m.name })));
-	const memberName = $derived(memberOptions.find((o) => o.value === memberId)?.label ?? '');
+	const memberOptions = $derived(recipientChoices(options));
+	const memberName = $derived(memberOptions.find((o) => o.value === recipient)?.label ?? '');
+	/** Gruppe oder Stamm: ohne Rechnung */
+	const unbilled = $derived(!!recipient && !recipient.startsWith('member:'));
 
 	async function loadMembers() {
 		membersLoading = true;
 		membersError = '';
 		try {
-			myMembers = await apiFetch<MemberOption[]>(`${BASE}/my/members`);
-			if (memberId && !memberOptions.some((o) => o.value === memberId)) memberId = null;
-			if (!memberId && myMembers.length === 1) memberId = myMembers[0]!.id;
+			options = await apiFetch<RecipientOptions>(`${BASE}/my/recipients`);
+			if (recipient && !memberOptions.some((o) => o.value === recipient)) recipient = null;
+			if (!recipient && memberOptions.length === 1) recipient = memberOptions[0]!.value;
 		} catch (e) {
-			membersError = errorText(e, 'Mitglieder konnten nicht geladen werden');
+			membersError = errorText(e, 'Auswahl konnte nicht geladen werden');
 		} finally {
 			membersLoading = false;
 		}
@@ -97,8 +100,8 @@
 
 	function requestOrder() {
 		memberError = '';
-		if (!memberId) {
-			memberError = 'Bitte wähle das Mitglied, für das du bestellst.';
+		if (!recipientPayload(recipient)) {
+			memberError = 'Bitte wähle, für wen du bestellst.';
 			document.getElementById('cart-member')?.focus();
 			return;
 		}
@@ -112,7 +115,7 @@
 
 	function payload() {
 		return {
-			memberId: memberId ?? '',
+			...(recipientPayload(recipient) ?? {}),
 			items: cart.map((c) => ({ variantId: c.variantId, quantity: c.quantity })),
 			note: note.trim() || null
 		};
@@ -127,7 +130,9 @@
 			});
 			const nr = created.order.number;
 			const inv = created.order.invoiceNumber;
-			if (inv && created.mailed)
+			if (created.order.recipient.kind !== 'member')
+				toast.success(`Bestellung ${nr} aufgegeben (ohne Rechnung)`);
+			else if (inv && created.mailed)
 				toast.success(`Bestellung ${nr} aufgegeben, Rechnung ${inv} per E-Mail verschickt`);
 			else if (inv)
 				toast.success(`Bestellung ${nr} aufgegeben, Rechnung ${inv} erstellt`, {
@@ -232,10 +237,10 @@
 		{/if}
 	{:else}
 		<div class="space-y-2">
-			<Label for="cart-member">Für Mitglied *</Label>
+			<Label for="cart-member">Bestellen für *</Label>
 			{#if membersLoading}
 				<p class="flex items-center gap-2 text-xs text-muted-foreground">
-					<LoaderCircle class="size-3.5 animate-spin" aria-hidden="true" /> Lädt Mitglieder …
+					<LoaderCircle class="size-3.5 animate-spin" aria-hidden="true" /> Lädt Auswahl …
 				</p>
 			{:else if membersError}
 				<p class="text-xs text-destructive" role="alert">
@@ -253,10 +258,10 @@
 			{#if memberOptions.length}
 				<SelectField
 					id="cart-member"
-					label="Mitglied"
+					label="Bestellen für"
 					options={memberOptions}
-					bind:value={memberId}
-					placeholder="Mitglied wählen …"
+					bind:value={recipient}
+					placeholder="Mitglied, Gruppe oder Stamm wählen …"
 					invalid={!!memberError}
 					onchange={() => (memberError = '')}
 				/>
@@ -281,7 +286,12 @@
 		</div>
 
 		<p class="text-xs text-muted-foreground">
-			Die Rechnung kommt sofort per E-Mail; bezahlt wird per Überweisung an die Kasse.
+			{#if unbilled}
+				Bestellung für {recipient === 'stamm' ? 'den Stamm' : 'die Gruppe'} – ohne Rechnung, die Ware
+				wird aus dem Lager ausgegeben.
+			{:else}
+				Die Rechnung kommt sofort per E-Mail; bezahlt wird per Überweisung an die Kasse.
+			{/if}
 		</p>
 
 		<Button class="w-full" disabled={!cart.length || busy} onclick={requestOrder}>
@@ -293,7 +303,7 @@
 <ConfirmDialog
 	bind:open={confirmOpen}
 	title="Verbindlich bestellen?"
-	description={`${count} Artikel für ${memberName || 'das gewählte Mitglied'}, zusammen ${formatEuro(total)}. Die Rechnung geht sofort per E-Mail raus.`}
+	description={`${count} Artikel für ${memberName || 'die gewählte Auswahl'}, zusammen ${formatEuro(total)}. ${unbilled ? 'Ohne Rechnung.' : 'Die Rechnung geht sofort per E-Mail raus.'}`}
 	confirmLabel="Verbindlich bestellen"
 	onconfirm={submit}
 />

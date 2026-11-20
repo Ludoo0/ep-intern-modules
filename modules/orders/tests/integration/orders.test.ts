@@ -23,6 +23,7 @@ import type { Office } from '$modules/offices/schemas';
 import type {
 	MemberOption,
 	Order,
+	RecipientOptions,
 	OrderCreated,
 	OrderList,
 	OrdersOverview,
@@ -322,7 +323,7 @@ describe('Bestellen', () => {
 		const all = await data<OrderList>(await O('/orders?scope=all', 'admin'));
 		expect(all.total).toBe(2);
 		const search = await data<OrderList>(await O('/orders?scope=all&search=Otto', 'admin'));
-		expect(search.items.map((o) => o.member.id)).toEqual([otherId]);
+		expect(search.items.map((o) => o.member?.id)).toEqual([otherId]);
 		await data(await O(`/orders/${order.id}`, 'eltern'));
 		await fail(await O(`/orders/${order.id}`, 'fremd'), 404);
 		await fail(await O(`/orders/${crypto.randomUUID()}`, 'admin'), 404);
@@ -794,6 +795,184 @@ describe('Bestellung bearbeiten und löschen', () => {
 			await O(`/stock/movements?variantId=${aufnaeher.variantIds[1]}`, 'lager')
 		);
 		expect(moves.items.some((m) => m.kind === 'handout' && m.orderNumber === null)).toBe(true);
+	});
+});
+
+describe('Gruppen- und Stammesbestellungen (ohne Rechnung)', () => {
+	let woelfe = '';
+	let sippe = '';
+	let groupOrder: Order;
+	let stammOrder: Order;
+	let wimpel: { articleId: string; variantIds: string[] };
+	const item = (quantity = 1) => [{ variantId: wimpel.variantIds[0], quantity }];
+
+	async function orderRow(id: string) {
+		return core.database.forModule('orders').transaction(async (tx) => {
+			const res = (await tx.execute(
+				sql`SELECT recipient_kind, member_id, group_id, treasury_dirty FROM orders WHERE id = ${id}`
+			)) as unknown as { rows: Record<string, unknown>[] };
+			return res.rows[0];
+		});
+	}
+
+	beforeAll(async () => {
+		const mkGroup = async (name: string) =>
+			(
+				await data<{ id: string }>(
+					await api('/modules/members/groups', {
+						token: keys.admin,
+						method: 'POST',
+						// Leitung als Mitglied ohne Konto; die Konten leiten über `group_leader_users`
+						json: { name, type: 'sippe', leaderIds: [otherId] }
+					}),
+					201
+				)
+			).id;
+		wimpel = await mkArticle('Wimpel', [{ label: '', priceCents: 500, stock: 10 }]);
+		woelfe = await mkGroup('Wölfe');
+		sippe = await mkGroup('Sippe Adler');
+		const leader = ['core.api.manage', 'orders.order.view', 'orders.order.group'];
+		await mkUser('leitung', leader);
+		await mkUser('coleitung', leader);
+		await mkUser('leitungohne', ['core.api.manage', 'orders.order.view']);
+		await mkUser('material', ['core.api.manage', 'orders.order.view', 'orders.order.stamm']);
+		await mkUser('material2', ['core.api.manage', 'orders.order.view', 'orders.order.stamm']);
+		await core.database.forModule('members').transaction(async (tx) => {
+			for (const u of ['leitung', 'coleitung', 'leitungohne']) {
+				await tx.execute(
+					sql`INSERT INTO group_leader_users (group_id, user_id) VALUES (${woelfe}, ${userIds[u]!})`
+				);
+			}
+		});
+	});
+
+	it('Auswahl im Warenkorb: geleitete Gruppen bzw. Stamm', async () => {
+		const lead = await data<RecipientOptions>(await O('/my/recipients', 'leitung'));
+		expect(lead).toEqual({ members: [], groups: [{ id: woelfe, name: 'Wölfe' }], stamm: false });
+		const mat = await data<RecipientOptions>(await O('/my/recipients', 'material'));
+		expect(mat).toEqual({ members: [], groups: [], stamm: true });
+		const eltern = await data<RecipientOptions>(await O('/my/recipients', 'eltern'));
+		expect(eltern.members.map((m) => m.id)).toEqual([kindId]);
+		expect(eltern.groups).toEqual([]);
+		await fail(await O('/my/recipients', 'nurlesen'), 403);
+		await fail(await O('/groups', 'leitung'), 403);
+		const all = await data<MemberOption[]>(await O('/groups', 'admin'));
+		expect(all.map((g) => g.id)).toEqual(expect.arrayContaining([woelfe, sippe]));
+	});
+
+	it('Gruppenleitung bestellt für die eigene Gruppe – ohne Rechnung', async () => {
+		const res = await data<OrderCreated>(
+			await post('/orders', 'leitung', { recipientKind: 'group', groupId: woelfe, items: item(2) }),
+			201
+		);
+		groupOrder = res.order;
+		expect(groupOrder.recipient).toEqual({ kind: 'group', id: woelfe, name: 'Wölfe' });
+		expect(groupOrder.member).toBeNull();
+		expect(groupOrder.invoiceNumber).toBeNull();
+		expect(groupOrder.canCancel).toBe(true);
+		expect(res.invoicePending).toBe(false);
+		expect(await orderRow(groupOrder.id)).toMatchObject({
+			recipient_kind: 'group',
+			member_id: null,
+			group_id: woelfe,
+			treasury_dirty: false
+		});
+	});
+
+	it('fremde Gruppe, fehlendes Recht, fehlende Gruppe', async () => {
+		await fail(
+			await post('/orders', 'leitung', { recipientKind: 'group', groupId: sippe, items: item() }),
+			404
+		);
+		await fail(
+			await post('/orders', 'leitungohne', {
+				recipientKind: 'group',
+				groupId: woelfe,
+				items: item()
+			}),
+			403
+		);
+		const err = await fail(
+			await post('/orders', 'leitung', { recipientKind: 'group', items: item() }),
+			422
+		);
+		expect(err.code).toBe('validation_failed');
+		// Gruppenleitung allein darf weder für den Stamm noch für Mitglieder bestellen
+		await fail(await post('/orders', 'leitung', { recipientKind: 'stamm', items: item() }), 403);
+		await fail(await post('/orders', 'leitung', { memberId: kindId, items: item() }), 403);
+	});
+
+	it('Co-Leitung sieht die Gruppenbestellung, andere nicht', async () => {
+		const mine = await data<OrderList>(await O('/orders', 'coleitung'));
+		expect(mine.items.map((o) => o.id)).toEqual([groupOrder.id]);
+		const one = await data<Order>(await O(`/orders/${groupOrder.id}`, 'coleitung'));
+		expect(one.canCancel).toBe(true);
+		// ohne Recht `group` zählt die Leitung nicht
+		await fail(await O(`/orders/${groupOrder.id}`, 'leitungohne'), 404);
+		await fail(await O(`/orders/${groupOrder.id}`, 'eltern'), 404);
+		await fail(await O(`/orders/${groupOrder.id}`, 'material'), 404);
+	});
+
+	it('Stamm: Materialwart*in bestellt, andere mit Recht `stamm` sehen sie', async () => {
+		const res = await data<OrderCreated>(
+			await post('/orders', 'material', { recipientKind: 'stamm', items: item() }),
+			201
+		);
+		stammOrder = res.order;
+		expect(stammOrder.recipient).toEqual({ kind: 'stamm', id: null, name: 'Stamm' });
+		expect(stammOrder.invoiceNumber).toBeNull();
+		const other = await data<OrderList>(await O('/orders', 'material2'));
+		expect(other.items.map((o) => o.id)).toEqual([stammOrder.id]);
+		await fail(await O(`/orders/${stammOrder.id}`, 'leitung'), 404);
+		await fail(await post('/orders', 'eltern', { recipientKind: 'stamm', items: item() }), 403);
+	});
+
+	it('Verwaltung bestellt für jede Gruppe; Kassen-Abgleich lässt sie ohne Rechnung', async () => {
+		const res = await data<OrderCreated>(
+			await post('/orders', 'admin', { recipientKind: 'group', groupId: sippe, items: item() }),
+			201
+		);
+		expect(res.order.recipient).toMatchObject({ kind: 'group', id: sippe, name: 'Sippe Adler' });
+		await fail(
+			await post('/orders', 'admin', {
+				recipientKind: 'group',
+				groupId: crypto.randomUUID(),
+				items: item()
+			}),
+			422
+		);
+		const all = await data<OrderList>(await O('/orders?scope=all&search=Wölfe', 'admin'));
+		expect(all.items.map((o) => o.id)).toEqual([groupOrder.id]);
+		await runJobNow(admin, 'orders.sync-treasury');
+		expect((await data<Order>(await O(`/orders/${res.order.id}`, 'admin'))).invoiceNumber).toBe(
+			null
+		);
+	});
+
+	it('Storno durch die Co-Leitung; nach Ausgabe nicht mehr', async () => {
+		const itemId = groupOrder.items[0]!.id;
+		const cancelled = await data<Order>(
+			await post(`/orders/${groupOrder.id}/cancel`, 'coleitung', {
+				items: [{ itemId, quantity: 1 }]
+			}),
+			201
+		);
+		expect(cancelled.items[0]!.cancelledQty).toBe(1);
+		await data(
+			await post(`/orders/${groupOrder.id}/handout`, 'admin', {
+				items: [{ itemId, quantity: 1 }]
+			}),
+			201
+		);
+		await fail(await post(`/orders/${groupOrder.id}/cancel`, 'leitung'), 409);
+		await data(await post(`/orders/${stammOrder.id}/cancel`, 'material2'), 201);
+	});
+
+	it('Löschen ohne Rechnung', async () => {
+		const res = await data<{ number: string; invoiceCancelled: boolean }>(
+			await O(`/orders/${stammOrder.id}`, 'admin', { method: 'DELETE' })
+		);
+		expect(res.invoiceCancelled).toBe(false);
 	});
 });
 

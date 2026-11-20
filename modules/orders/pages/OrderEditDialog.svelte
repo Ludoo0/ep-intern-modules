@@ -21,6 +21,7 @@
 		type Order
 	} from '../schemas';
 	import { API, errorMessage, fieldErrorsFrom, issuesToErrors, itemName } from './admin-helpers';
+	import { recipientLabel } from './helpers';
 
 	let {
 		open = $bindable(false),
@@ -176,8 +177,10 @@
 		<Dialog.Header>
 			<Dialog.Title>Bestellung {order?.number ?? ''} bearbeiten</Dialog.Title>
 			<Dialog.Description>
-				Für {order?.member.name ?? ''}. Mengen und Preise ändern, Artikel hinzufügen oder entfernen
-				– die Rechnung in der Kasse wird angepasst.
+				Für {order ? recipientLabel(order.recipient) : ''}. Mengen und Preise ändern, Artikel
+				hinzufügen oder entfernen{order?.recipient.kind === 'member'
+					? ' – die Rechnung in der Kasse wird angepasst'
+					: ' (ohne Rechnung)'}.
 			</Dialog.Description>
 		</Dialog.Header>
 		<form class="space-y-4" onsubmit={submit} novalidate>
