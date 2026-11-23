@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import CalendarDays from '@lucide/svelte/icons/calendar-days';
 	import Globe from '@lucide/svelte/icons/globe';
 	import ImageIcon from '@lucide/svelte/icons/image';
 	import Lock from '@lucide/svelte/icons/lock';
@@ -27,6 +28,7 @@
 		type Visibility
 	} from '../schemas';
 	import EventBadges from './EventBadges.svelte';
+	import { formatRefRange } from './event-format';
 	import GalleryDialog from './GalleryDialog.svelte';
 
 	/** Teilbar durch 1–4 Spalten, damit die letzte Reihe voll ist */
@@ -161,7 +163,9 @@
 					<Skeleton class="aspect-[4/3] w-full rounded-none" />
 					<div class="space-y-2 p-3">
 						<Skeleton class="h-4 w-2/3" />
+						<Skeleton class="h-3 w-1/2" />
 						<Skeleton class="h-3 w-1/3" />
+						<Skeleton class="h-5 w-1/2" />
 					</div>
 				</div>
 			{/each}
@@ -187,16 +191,17 @@
 	{:else}
 		<ul
 			class={[
-				'grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4',
+				// auto-rows-fr: alle Reihen (und damit alle Kacheln) gleich hoch
+				'grid auto-rows-fr grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4',
 				loading && 'opacity-60 transition-opacity'
 			]}
 			aria-busy={loading}
 		>
 			{#each items as g (g.id)}
-				<li>
+				<li class="flex">
 					<a
 						href="/modules/galleries/{encodeURIComponent(g.id)}"
-						class="group block overflow-hidden rounded-lg border bg-card text-card-foreground transition-shadow outline-none hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+						class="group flex w-full flex-col overflow-hidden rounded-lg border bg-card text-card-foreground transition-shadow outline-none hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
 					>
 						<div class="relative aspect-[4/3] overflow-hidden bg-muted">
 							{#if g.cover}
@@ -218,8 +223,17 @@
 								</div>
 							{/if}
 						</div>
-						<div class="space-y-1.5 p-3">
+						<div class="flex flex-1 flex-col gap-1.5 p-3">
 							<p class="truncate font-semibold" title={g.title}>{g.title}</p>
+							<!-- Zeile immer vorhanden (gleiche Höhe mit und ohne Datum) -->
+							<p class="flex h-4 items-center gap-1 text-xs text-muted-foreground tabular-nums">
+								{#if g.startsOn}
+									<CalendarDays class="size-3.5 shrink-0" aria-hidden="true" />
+									<span class="truncate">
+										{formatRefRange({ startsOn: g.startsOn, endsOn: g.endsOn })}
+									</span>
+								{/if}
+							</p>
 							<div class="flex flex-wrap items-center justify-between gap-2">
 								<span class="text-xs text-muted-foreground tabular-nums">
 									{imageCountLabel(g.imageCount)}
@@ -233,7 +247,10 @@
 									{VISIBILITY_LABELS[g.visibility]}
 								</Badge>
 							</div>
-							<EventBadges events={g.events} max={1} compact />
+							<!-- Termin-Zeile mit fester Mindesthöhe, auch ohne Termin -->
+							<div class="mt-auto min-h-6">
+								<EventBadges events={g.events} max={1} compact />
+							</div>
 						</div>
 					</a>
 				</li>

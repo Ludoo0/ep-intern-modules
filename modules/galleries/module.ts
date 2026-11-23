@@ -4,6 +4,7 @@ import { galleriesAssist, PERM_AI } from './assist';
 import { NOTIFY_GALLERY_SHARED } from './schemas';
 import { galleriesSearch } from './search';
 import { galleriesEndpoints } from './galleries.endpoints';
+import { downloadEndpoints } from './download.endpoints';
 import { imagesEndpoints } from './images.endpoints';
 import { metaEndpoints } from './meta.endpoints';
 import { websiteEndpoints } from './website.endpoints';
@@ -14,6 +15,7 @@ import m0002 from './migrations/0002_gallery_events.sql?raw';
 import m0003 from './migrations/0003_publish_confirmation.sql?raw';
 import m0004 from './migrations/0004_image_private.sql?raw';
 import m0005 from './migrations/0005_videos.sql?raw';
+import m0006 from './migrations/0006_gallery_dates.sql?raw';
 import { subjectExport } from './subject-export';
 import { galleryRefsService } from './refs.service';
 import type { GalleryRefsService } from './contract';
@@ -33,6 +35,7 @@ export default defineModule({
 			'galleries.gallery.view-all',
 			'galleries.gallery.edit-all',
 			'galleries.gallery.publish',
+			'galleries.gallery.download',
 			'galleries.website.read'
 		],
 		permissionDescriptions: {
@@ -45,6 +48,8 @@ export default defineModule({
 			'galleries.gallery.edit-all': 'Alle Galerien bearbeiten und löschen',
 			'galleries.gallery.publish':
 				'Galerien veröffentlichen (Sichtbarkeit „Öffentlich“, erscheinen auf der Stammeswebsite)',
+			'galleries.gallery.download':
+				'Ganze Galerien als ZIP herunterladen (nur Galerien, die man sehen darf)',
 			'galleries.website.read':
 				'Öffentliche Galerien und Bilder für die Stammeswebsite abrufen (nur API-Key-Scope)'
 		},
@@ -63,7 +68,8 @@ export default defineModule({
 		{ name: '0002_gallery_events', sql: m0002 },
 		{ name: '0003_publish_confirmation', sql: m0003 },
 		{ name: '0004_image_private', sql: m0004 },
-		{ name: '0005_videos', sql: m0005 }
+		{ name: '0005_videos', sql: m0005 },
+		{ name: '0006_gallery_dates', sql: m0006 }
 	],
 	/** Verweise auf öffentliche Galerien (z. B. Blog-Beiträge im Modul `website`) */
 	provides: galleryRefsService satisfies GalleryRefsService,
@@ -87,5 +93,11 @@ export default defineModule({
 	/** Datenauskunft (Art. 15/20): Galerien, Uploads und Freigaben der Person */
 	subjectExport,
 	// Reihenfolge: erster Treffer gewinnt (spezifische Pfade zuerst)
-	endpoints: [...websiteEndpoints, ...metaEndpoints, ...imagesEndpoints, ...galleriesEndpoints]
+	endpoints: [
+		...websiteEndpoints,
+		...metaEndpoints,
+		...downloadEndpoints,
+		...imagesEndpoints,
+		...galleriesEndpoints
+	]
 });

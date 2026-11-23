@@ -3,7 +3,7 @@
 	"id": "galleries",
 	"name": "Galerien",
 	"description": "Bilder- und Videogalerien mit Freigaben, Termin-Zuordnung und Stammeswebsite",
-	"version": "1.5.0",
+	"version": "1.6.0",
 	"core": ">=2.0.0-0 <3.0.0",
 	"dependencies": {},
 	"optionalDependencies": {
@@ -17,6 +17,7 @@
 	"permissions": [
 		"galleries.ai.use",
 		"galleries.gallery.create",
+		"galleries.gallery.download",
 		"galleries.gallery.edit-all",
 		"galleries.gallery.publish",
 		"galleries.gallery.view",

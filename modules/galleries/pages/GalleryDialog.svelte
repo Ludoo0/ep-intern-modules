@@ -53,6 +53,10 @@
 	const publishLocked = $derived(!canPublish && gallery?.visibility !== 'public');
 	let shares = $state<ShareEntry[]>([]);
 	let events = $state<EventRef[]>([]);
+	let startsOn = $state('');
+	let endsOn = $state('');
+	/** Anzahl Termine beim letzten Blick (Vorbelegung des Zeitraums nur beim Hinzufügen) */
+	let lastEventCount = 0;
 	let stammName = $state('Stamm');
 	let busy = $state(false);
 	let error = $state('');
@@ -72,6 +76,8 @@
 		description: 'gal-description',
 		visibility: 'gal-visibility',
 		eventIds: 'gal-events',
+		startsOn: 'gal-starts-on',
+		endsOn: 'gal-ends-on',
 		shares: 'gal-shares'
 	} as const;
 
@@ -92,15 +98,35 @@
 			description = g.description ?? '';
 			visibility = g.visibility;
 			events = [...g.events];
+			startsOn = g.startsOn ?? '';
+			endsOn = g.endsOn ?? '';
+			lastEventCount = g.events.length;
 		} else {
 			title = '';
 			description = '';
 			visibility = 'private';
 			events = [];
+			startsOn = '';
+			endsOn = '';
+			lastEventCount = 0;
 			shares = [];
 			void loadStammName();
 		}
 	}
+
+	// Termin hinzugefügt und noch kein Zeitraum → Zeitraum des Termins vorschlagen
+	$effect(() => {
+		const list = events;
+		untrack(() => {
+			const added = list.length > lastEventCount;
+			lastEventCount = list.length;
+			if (!added || startsOn || endsOn) return;
+			const ev = list[list.length - 1];
+			if (!ev) return;
+			startsOn = ev.startsOn;
+			endsOn = ev.endsOn && ev.endsOn !== ev.startsOn ? ev.endsOn : '';
+		});
+	});
 
 	async function loadStammName() {
 		try {
@@ -212,7 +238,10 @@
 			description: description || null,
 			visibility,
 			shares: shareInputs,
-			eventIds: events.map((ev) => ev.id)
+			eventIds: events.map((ev) => ev.id),
+			startsOn: startsOn || null,
+			// Ohne Start ist das (gesperrte) Ende bedeutungslos
+			endsOn: (startsOn && endsOn) || null
 		});
 		if (!parsed.success) {
 			showErrors(issuesToErrors(parsed.error.issues), 'Bitte die markierten Felder prüfen.');
@@ -373,6 +402,34 @@
 				>
 					<EventPicker id={ids.eventIds} bind:value={events} disabled={busy} />
 				</FormField>
+
+				<div class="grid gap-4 sm:grid-cols-2">
+					<FormField label="Von" id={ids.startsOn} error={fieldErrors.startsOn}>
+						<Input
+							id={ids.startsOn}
+							type="date"
+							bind:value={startsOn}
+							disabled={busy}
+							aria-invalid={!!fieldErrors.startsOn}
+							aria-describedby={describe('startsOn')}
+						/>
+					</FormField>
+					<FormField label="Bis (optional)" id={ids.endsOn} error={fieldErrors.endsOn}>
+						<Input
+							id={ids.endsOn}
+							type="date"
+							bind:value={endsOn}
+							min={startsOn || undefined}
+							disabled={busy || !startsOn}
+							aria-invalid={!!fieldErrors.endsOn}
+							aria-describedby={describe('endsOn')}
+						/>
+					</FormField>
+					<p class="-mt-2 text-xs text-muted-foreground sm:col-span-2">
+						Optional. Bestimmt die Reihenfolge der Galerien; ohne Datum zählt der Termin, sonst das
+						Anlagedatum.
+					</p>
+				</div>
 
 				{#if mode === 'create'}
 					<section class="space-y-3" aria-labelledby="gal-shares-heading">

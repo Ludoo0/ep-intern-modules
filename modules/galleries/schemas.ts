@@ -11,6 +11,8 @@ export const NOTIFY_GALLERY_SHARED = 'gallery-shared';
 
 /** Recht zum Veröffentlichen (Sichtbarkeit „öffentlich“ = Stammeswebsite), #67 01b-06 */
 export const PUBLISH_PERMISSION = 'galleries.gallery.publish';
+/** Ganze Galerie als ZIP herunterladen (eigenes Recht, kein Standard-Grant) */
+export const DOWNLOAD_PERMISSION = 'galleries.gallery.download';
 
 export const VISIBILITIES = ['private', 'public'] as const;
 export type Visibility = (typeof VISIBILITIES)[number];
@@ -96,6 +98,18 @@ const optionalText = (max: number) =>
 		.nullish()
 		.transform((v) => (v ? v : null));
 
+/** Kalenderdatum `YYYY-MM-DD` (optional; leer → `null`) */
+const optionalDate = z
+	.string()
+	.regex(/^\d{4}-\d{2}-\d{2}$/, 'Format JJJJ-MM-TT')
+	.refine((v) => {
+		const d = new Date(`${v}T00:00:00Z`);
+		return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+	}, 'Ungültiges Datum')
+	.or(z.literal(''))
+	.nullish()
+	.transform((v) => (v ? v : null));
+
 const refId = z
 	.string()
 	.min(1)
@@ -132,6 +146,9 @@ export const galleryInput = z
 		shares: z.array(shareInput).max(MAX_SHARES).default([]),
 		/** Termine aus `events`, denen die ganze Galerie zugeordnet ist */
 		eventIds: eventIdList.default([]),
+		/** Zeitraum (optional, für die Sortierung): Ende nur mit Start, nicht vor dem Start */
+		startsOn: optionalDate,
+		endsOn: optionalDate,
 		/**
 		 * Bestätigung „für alle erkennbaren Personen liegt eine Website-Einwilligung vor“ – Pflicht,
 		 * wenn die Galerie dadurch öffentlich wird (Neuanlage öffentlich oder Wechsel privat → öffentlich)
@@ -140,6 +157,19 @@ export const galleryInput = z
 	})
 	.strict()
 	.superRefine((v, ctx) => {
+		if (v.endsOn && !v.startsOn) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['endsOn'],
+				message: 'Für ein Enddatum wird ein Startdatum benötigt'
+			});
+		} else if (v.endsOn && v.startsOn && v.endsOn < v.startsOn) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['endsOn'],
+				message: 'Das Enddatum liegt vor dem Startdatum'
+			});
+		}
 		const seen = new Set<string>();
 		v.shares.forEach((s, i) => {
 			const k = `${s.type}:${s.id}`;
@@ -273,6 +303,9 @@ export interface GalleryItem {
 	title: string;
 	description: string | null;
 	visibility: Visibility;
+	/** Zeitraum der Galerie (`YYYY-MM-DD`), optional */
+	startsOn: string | null;
+	endsOn: string | null;
 	imageCount: number;
 	/** Effektives Titelbild (gesetzt oder ältestes Bild); `null` ohne Bilder */
 	cover: ImageCover | null;
@@ -348,6 +381,9 @@ export interface WebsiteGallery {
 	id: string;
 	title: string;
 	description: string | null;
+	/** Zeitraum der Galerie (`YYYY-MM-DD`), optional */
+	startsOn: string | null;
+	endsOn: string | null;
 	imageCount: number;
 	cover: ImageCover | null;
 	/** Nur Termine mit „auf der Website“ */

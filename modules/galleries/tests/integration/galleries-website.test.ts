@@ -216,7 +216,8 @@ beforeAll(async () => {
 	pubImg1 = await upload(publicG.id, await jpeg('#aa3300'), 'kinder-am-see.jpg', 'Am See');
 	pubImg2 = await upload(publicG.id, await jpeg('#0033aa', 300, 600), 'zweites.jpg');
 	privImg = await upload(privateG.id, await jpeg('#00aa33'), 'privat.jpg', 'Privat');
-	// zuletzt geändert = zuerst gelistet: Sommerlager vor „Ohne Termin“
+	// Sortierung (1.6.0): „Ohne Termin“ zählt mit dem Anlagedatum (heute), Sommerlager mit dem
+	// Website-Termin (2026-08-01) → „Ohne Termin“ zuerst
 	ok(
 		await call('owner', 'PUT', `/galleries/${publicG.id}/images/${pubImg1.id}`, {
 			description: 'Am See'
@@ -237,9 +238,11 @@ const webEvent = () => ({
 const GALLERY_KEYS = [
 	'cover',
 	'description',
+	'endsOn',
 	'events',
 	'id',
 	'imageCount',
+	'startsOn',
 	'title',
 	'updatedAt'
 ].sort();
@@ -271,8 +274,8 @@ describe('GET /website/galleries', () => {
 		// Vertrag (#48): strikt gegen das exportierte Website-Schema
 		websiteGalleryListSchema.parse(ok(res));
 		const items = listOf<WebsiteGallery>(ok(res));
-		expect(items.map((g) => g.id)).toEqual([publicG.id, otherPublicG.id]);
-		const g = items[0]!;
+		expect(items.map((g) => g.id)).toEqual([otherPublicG.id, publicG.id]);
+		const g = items[1]!;
 		expect(Object.keys(g).sort()).toEqual(GALLERY_KEYS);
 		expect(g).toMatchObject({
 			title: 'Sommerlager 2026',
@@ -282,7 +285,7 @@ describe('GET /website/galleries', () => {
 		});
 		// nur Termine mit „auf der Website“
 		expect(g.events).toEqual([webEvent()]);
-		expect(items[1]!.events).toEqual([]);
+		expect(items[0]!.events).toEqual([]);
 		expect(new Date(g.updatedAt).toString()).not.toBe('Invalid Date');
 		const text = JSON.stringify(res.body);
 		for (const t of FORBIDDEN_TEXT) expect(text, t).not.toContain(t);

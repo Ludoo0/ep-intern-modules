@@ -4,7 +4,7 @@ paths: ["modules/galleries/**", "tests/**/galleries*", "src/lib/server/core/imag
 
 # Modul `galleries` (Galerien)
 
-Fotos **und Videos** (seit 1.5.0) intern sammeln und ausgewählte Galerien auf der **Stammeswebsite** zeigen. Schema `mod_galleries`, Version 1.5.0,
+Fotos **und Videos** (seit 1.5.0) intern sammeln und ausgewählte Galerien auf der **Stammeswebsite** zeigen. Schema `mod_galleries`, Version 1.6.0,
 startet deaktiviert, keine harten Abhängigkeiten; `optionalDependencies: ['members', 'events']` (Gruppen/Mitglieder als
 Freigabe-Ziele, Termine für die Zuordnung **ganzer Galerien** (nicht einzelner Bilder) – ohne `events` entfällt die Zuordnung still, Eingabe → 422).
 Freigabe nach dem Muster `events` (**Freigabe an Principals**, siehe `architecture.md`), dazu je Galerie **öffentlich/privat**
@@ -14,14 +14,15 @@ Bildverarbeitung serverseitig über den Core-Dienst `core.images` (sharp). Navig
 ## Dateien (`modules/galleries/`)
 | Datei | Inhalt |
 |---|---|
-| `module.ts` | Manifest (Rechte, `defaultRoleGrants` Mitglied → `galleries.gallery.view`, Navigation), Migrationen, `search`, `resetAreas`/`resetUsers`, `onUserDeleted`, `subjectExport` (kein `onMemberDeleted`, kein `backup`-Hook), Endpoints (Reihenfolge `website` → `meta` → `images` → `galleries`, erster Treffer gewinnt) |
+| `module.ts` | Manifest (Rechte, `defaultRoleGrants` Mitglied → `galleries.gallery.view`, Navigation), Migrationen, `search`, `resetAreas`/`resetUsers`, `onUserDeleted`, `subjectExport` (kein `onMemberDeleted`, kein `backup`-Hook), Endpoints (Reihenfolge `website` → `meta` → `download` → `images` → `galleries`, erster Treffer gewinnt) |
 | `ui.ts` | Route `''` → `GalleriesPage`, `':id'` → `GalleryDetailPage` |
 | `schemas.ts` | API-Vertrag (Server + UI): `galleryInput`, `coverInput`, `uploadFields`, `imageUpdateInput`, `imageBulkInput` (`BULK_ACTIONS`), `shareInput`, `eventId`, Params (`idParams`, `imageParams`, `variantParams`, `websiteVariantParams`), Queries (`listQuery`, `principalSearchQuery`, `eventSearchQuery`, `websiteListQuery`, `websiteImagesQuery`), Konstanten (`VISIBILITIES` + Labels/Beschreibungen, `IMAGE_VARIANTS`, `WEBSITE_VARIANTS`, `IMAGE_CONTENT_TYPES`/`IMAGE_ACCEPT`, `MAX_IMAGE_BYTES` 25 MB, `MAX_IMAGES_PER_GALLERY` 2000, `MAX_EVENTS_PER_IMAGE` 20, `MAX_SHARES` 200, `MAX_BULK` 200, `UPLOAD_CONCURRENCY` 3), DTOs `GalleryItem`, `GalleryDetail`, `GalleryImage`, `GalleryShare`, `EventRef`, `ImageCover`, `Website*`, Helfer `imageUrl()` |
 | `access.ts` | Nur Konfiguration des SDK-Bausteins `createShareAccess` (#35, `readIf` = `visibility = 'public'`): `resolveAccess`, `requireAccess` (404/403), `visibleGalleriesFilter` (SQL, Alias `g`), `accessForMany`, `canEditAll`/`canViewAll`, `loadShares`, `replaceShares` |
 | `files.ts` | `db()`, `filesCtx()` (Systemkontext `galleries-files`), `VARIANT_SPECS`, `variantPath`, `VARIANT_COLUMN`, `removeFiles` (best-effort, Sammel-Löschung `core.storage.removeMany`), `fileResponse` (gestreamte Response über `core.storage.downloadStream`), `effectiveCoverSql`/`effectiveCover`, `eventsService()` |
-| `galleries.service.ts` | `loadShares`/`replaceShares`, Termine der Galerie: `loadEventIds`, `eventIdsByGallery`, `replaceGalleryEvents`, `validateEventIds(ctx, ids, keep)`, `describeEvents`/`pickEvents`; `loadDetailData` (in der Transaktion, prüft Lesezugriff) + `finishDetail` (danach: Eigentümer*in, Termine, Freigaben), `buildGalleryDetail(ctx, id, keys)`, `describeShares`, `everyoneLabel()` (Einstellung `events.stamm.name`, sonst „Stamm“), `iso`, `likePattern` |
+| `galleries.service.ts` | `loadShares`/`replaceShares`, Termine der Galerie: `loadEventIds`, `eventIdsByGallery`, `replaceGalleryEvents`, `validateEventIds(ctx, ids, keep)`, `describeEvents`/`pickEvents`; `loadDetailData` (in der Transaktion, prüft Lesezugriff) + `finishDetail` (danach: Eigentümer*in, Termine, Freigaben), `buildGalleryDetail(ctx, id, keys)`, `describeShares`, `everyoneLabel()` (Einstellung `events.stamm.name`, sonst „Stamm“), `iso`, `likePattern`; Sortierung `STARTS_ON_SQL`/`ENDS_ON_SQL`/`CREATED_ON_SQL`, `sortRowOf`, `gallerySortDate`, `compareGalleries` |
 | `images.service.ts` | `IMAGE_COLUMNS` (Alias `i`), `toGalleryImage`, `requireImageRow`/`requireImagesOfGallery`, `imagePathsOf`, `sanitizeOriginalName`, `downloadName` |
 | `galleries.endpoints.ts` | CRUD `/galleries`, Titelbild `/galleries/:id/cover` |
+| `download.endpoints.ts` | ZIP der ganzen Galerie (`GET /galleries/:id/download`): `zipStream` (fflate `Zip` + `ZipPassThrough`, gestreamt), `uniqueNames`, `MAX_ZIP_BYTES` |
 | `images.endpoints.ts` | Upload (→ `upload.service.ts`), Bearbeiten, Sammelaktionen, Löschen, Auslieferung der Varianten (Videos mit Range) |
 | `upload.service.ts` | `uploadMedia`: Bild (`core.images`, drei Varianten) oder Video (Typ per Magic Bytes, Metadaten entfernt, Pflichtfeld `poster` → `thumb`/`web`, `full_path` = Video) |
 | `video.ts` | rein: `sniffVideoType` (MP4/MOV/WebM; AVIF/HEIC/Matroska abgelehnt), `stripVideoMetadata` (siehe Videos) |
@@ -33,9 +34,9 @@ Bildverarbeitung serverseitig über den Core-Dienst `core.images` (sharp). Navig
 | `search.ts` | Globale Suche (`galleriesSearch`): Galerien nach Titel/Beschreibung, sichtbar wie `GET /galleries` (`visibleGalleriesFilter`, Principal-Schlüssel vor der Transaktion), zuletzt geänderte zuerst |
 | `user-deleted.ts` | `onUserDeleted`: Freigaben `user:<id>` löschen, Eigentum an `transferTo` (sonst unverändert), `created_by`/`uploaded_by`/`public_confirmed_by` → `NULL` |
 | `reset.ts` | Reset-Bereich `all` (vier Tabellen, Kind vor Eltern, `storagePrefixes: 'all'`, `rebuild`), `resetUsers` (Benutzer-Freigaben löschen, `owner_id`/`created_by`/`uploaded_by` auf den verbleibenden Benutzer) |
-| `pages/GalleriesPage.svelte` | Kartenraster mit Titelbild, Badge Öffentlich/Privat, Suche/Filter, „Neue Galerie“ |
-| `pages/GalleryDialog.svelte` | Anlegen/Bearbeiten: Titel, Beschreibung, Sichtbarkeit, **Termine** (`EventPicker`), `SharePanel` lokal (nur Anlegen) |
-| `pages/GalleryDetailPage.svelte` | Kopf mit **`ShareMenu` oben rechts** (`type`, `everyoneLabel`), Bearbeiten/Löschen, Bilder |
+| `pages/GalleriesPage.svelte` | Kartenraster (alle Kacheln gleich hoch: `auto-rows-fr`, Zeitraum- und Termin-Zeile immer reserviert) mit Titelbild, Zeitraum, Badge Öffentlich/Privat, Suche/Filter, „Neue Galerie“ |
+| `pages/GalleryDialog.svelte` | Anlegen/Bearbeiten: Titel, Beschreibung, Sichtbarkeit, **Termine** (`EventPicker`), **Zeitraum** Von/Bis (wird beim Hinzufügen eines Termins vorbelegt, wenn leer), `SharePanel` lokal (nur Anlegen) |
+| `pages/GalleryDetailPage.svelte` | Kopf mit **`ShareMenu` oben rechts** (`type`, `everyoneLabel`), Bearbeiten, Menü „Mehr“ (Als ZIP herunterladen mit `download`-Recht, Löschen mit `edit`), Zeitraum, Bilder |
 | `pages/UploadZone.svelte` | Mehrfachauswahl, Drag & Drop, Fortschritt, 3 Uploads parallel (`UPLOAD_CONCURRENCY`) |
 | `pages/ImageGrid.svelte` | Bildraster (`thumb`), Badges „Titelbild“ und „Nur intern“, Auswahlmodus |
 | `pages/ImageViewer.svelte` | Lightbox (←/→), Beschreibung bearbeiten, „Als Titelbild festlegen“, „Nur intern“ / „Für Website freigeben“, Download `full` |
@@ -44,7 +45,7 @@ Bildverarbeitung serverseitig über den Core-Dienst `core.images` (sharp). Navig
 | `pages/ImageBulkBar.svelte` | Sammelleiste im Auswahlmodus: Nur intern, Für Website freigeben, Löschen |
 | `contract.ts`, `refs.service.ts` | Dienst `GalleryRefsService` über `provides` (2026-10-25, für `website`): `searchPublicGalleryRefs`, `publicGalleryRefs` – nur öffentliche Galerien, ohne Rechteprüfung |
 | `subject-export.ts` | Datenauskunft (`subjectExport`, Art. 15/20): eigene Galerien, hochgeladene Bilder (nur Metadaten), Freigaben an das Konto, Veröffentlichungs-Bestätigungen |
-| `migrations/0001_init.sql` … `0005_videos.sql` | Schema; Termine je Galerie; Bestätigung beim Veröffentlichen; Bilder „nur intern“; Videos |
+| `migrations/0001_init.sql` … `0006_gallery_dates.sql` | Schema; Termine je Galerie; Bestätigung beim Veröffentlichen; Bilder „nur intern“; Videos; Zeitraum |
 
 ## Datenmodell (0001)
 - IDs sind `text` (UUID per `crypto.randomUUID()`), Zeitstempel `timestamptz`, keine FKs auf Core-/Fremdschemata.
@@ -62,6 +63,7 @@ Bildverarbeitung serverseitig über den Core-Dienst `core.images` (sharp). Navig
 - 0005: `gallery_images.media_type` text NOT NULL DEFAULT `'image'` CHECK `image|video`, `duration_seconds` real NULL. Bei Videos: `full_path` = Videodatei,
   `thumb_path`/`web_path` = Vorschaubilder, `content_type`/`size_bytes` vom Video, `width`/`height` vom Vorschaubild. Videos zählen wie Bilder
   (Anzahl, Grenze 2000, Titelbild = Vorschaubild, „nur intern“, Sammelaktionen).
+- 0006: `galleries.starts_on`/`ends_on` date NULL, CHECK `galleries_dates_check` (Ende nur mit Start, nicht davor). Ausgabe immer per `to_char(…, 'YYYY-MM-DD')`.
 - `gallery_shares`: `<obj>_shares`-Muster (PK `gallery_id` + `principal_type` + `principal_id`, `principal_type` CHECK
   `everyone|group|role|user|member`, `level` CHECK `read|edit`, `created_by`, `created_at`), Index `(principal_type, principal_id)`.
 
@@ -78,6 +80,7 @@ Bildverarbeitung serverseitig über den Core-Dienst `core.images` (sharp). Navig
 | `galleries.gallery.view-all` | alle Galerien lesen |
 | `galleries.gallery.edit-all` | alle Galerien bearbeiten/löschen; System-Kontext ebenso |
 | `galleries.gallery.publish` | Galerie öffentlich stellen (Stammeswebsite, #67 01b-06): POST mit `public` bzw. PUT privat → öffentlich ohne Recht **403** (vor der Einwilligungsprüfung 422); Zurücknehmen darf jede*r mit Bearbeitungsrecht; UI sperrt „Öffentlich“ ohne Recht |
+| `galleries.gallery.download` | ganze Galerie als ZIP (`GET /galleries/:id/download`, zusätzlich Objekt-`read`); **kein** `defaultRoleGrant` (Nutzerentscheidung 2026-11-20) – nur per Rolle |
 | `galleries.website.read` | **nur** `/website/…` – Scope für den API-Key der Stammeswebsite; kein Zugriff auf interne Endpoints |
 
 Keine `galleries.storage.*`-Rechte: Dateien werden nach der Objektprüfung mit dem Systemkontext gelesen/geschrieben.
@@ -94,11 +97,12 @@ Bearbeiten bei Änderungen → **403**.
 ## API (`/api/v1/modules/galleries/…`, Session oder API-Key, nicht öffentlich)
 | Methode + Pfad | Recht | Besonderheiten |
 |---|---|---|
-| GET `/galleries` | gallery.view | sichtbare Galerien; Query `search`, `visibility`, `eventId` (Galerien zu einem Termin), `limit` 1–200 (50), `offset`; Item mit Titel, Sichtbarkeit, `imageCount`, `cover { imageId, width, height }`, `events` (sichtbare Termine), `access` |
+| GET `/galleries` | gallery.view | sichtbare Galerien; Query `search`, `visibility`, `eventId` (Galerien zu einem Termin), `limit` 1–200 (50), `offset`; **Sortierung** siehe „Zeitraum und Sortierung“; Item mit Titel, Sichtbarkeit, `startsOn`/`endsOn`, `imageCount`, `cover { imageId, width, height }`, `events` (sichtbare Termine), `access` |
 | GET `/galleries/:id` | gallery.view | Detail inkl. `events` (nur für den Aufrufer sichtbare Termine) und Bilder (Beschreibung, Maße), `coverImageId` + `coverIsDefault`, `shares` nur bei `edit` |
-| POST `/galleries` | gallery.create | `galleryInput` strikt (`title`, `description`, `visibility`, `shares`, `eventIds` ≤ 20); Eigentümer*in = Aufrufer; Termine über den `events`-Dienst geprüft (422 `eventIds[i]`; `events` inaktiv + nicht leer → 422 `eventIds`) |
-| PUT `/galleries/:id` | Objekt-`edit` | ersetzt alles inkl. Freigaben und Termine; bereits gespeicherte, inzwischen unsichtbare Termine bleiben ungeprüft |
+| POST `/galleries` | gallery.create | `galleryInput` strikt (`title`, `description`, `visibility`, `shares`, `eventIds` ≤ 20, `startsOn`/`endsOn` optional `YYYY-MM-DD`, Ende ohne Start bzw. vor Start → 422 `endsOn`); Eigentümer*in = Aufrufer; Termine über den `events`-Dienst geprüft (422 `eventIds[i]`; `events` inaktiv + nicht leer → 422 `eventIds`) |
+| PUT `/galleries/:id` | Objekt-`edit` | ersetzt alles inkl. Freigaben, Termine und Zeitraum (fehlt `startsOn` → gelöscht); bereits gespeicherte, inzwischen unsichtbare Termine bleiben ungeprüft |
 | (POST/PUT) Veröffentlichen | – | wird die Galerie öffentlich (Neuanlage `public` oder privat → öffentlich), ist `consentConfirmed: true` Pflicht, sonst **422** Pfad `consentConfirmed`; speichert `public_confirmed_at`/`_by`, Audit-Metadaten `consentConfirmed: true`. Bleibt sie öffentlich, keine neue Bestätigung; zurück auf privat → Bestätigung bleibt als Historie, erneutes Veröffentlichen verlangt eine neue. Detail: `publicConfirmation { at, by: { id, name } \| null } \| null` |
+| GET `/galleries/:id/download` | gallery.view + **gallery.download** (403) + Objekt-`read` (404) | ZIP aller Einträge in Upload-Reihenfolge: Bilder `full`, Videos die Videodatei, auch „nur intern“; Namen `downloadName` + `safeFileName` (Umlaute ausgeschrieben), Duplikate ohne Groß-/Kleinschreibung → `name (2).jpg`; gestreamt (fflate, ohne Kompression, Dateien nacheinander aus dem Storage), `attachment` `<Titel>.zip`, `no-store`; leer → 422, Σ `size_bytes` > 3,5 GB → 413 (kein ZIP64); Rate-Limit 10/60 s; Audit `galleries.gallery.downloaded` `{ images, videos }`. Fehler mitten im Stream → abgebrochener Download |
 | DELETE `/galleries/:id` | Objekt-`edit` | CASCADE; Dateien **nach** der Transaktion best-effort entfernen |
 | PUT `/galleries/:id/cover` | Objekt-`edit` | `{ imageId \| null }` (null = Standard); fremdes Bild → 422 |
 | POST `/galleries/:id/images` | Objekt-`edit` | multipart `file` (+ optional `description`), Bild ≤ 25 MB, ≤ 2000 Einträge je Galerie; **ein Request je Datei**. Video (Typ oder Endung MP4/M4V/MOV/WebM): ≤ 100 MB bzw. `core.storage.maxFileSizeMb`, Pflichtfeld `poster` (JPEG/PNG/WebP, sonst 422 `poster`), optional `duration` (0–86400 s, 422 `duration`); Inhalt kein Video → 422 `file`; Speicher ohne Videotypen → 422 `file` mit Hinweis |
@@ -109,12 +113,21 @@ Bearbeiten bei Änderungen → **403**.
 | GET `/galleries/:id/images/:imageId/:variant` | gallery.view + Objekt-`read` | `thumb\|web\|full\|video` (`video` nur bei Videos, sonst 404; `full`/`video` eines Videos beantworten **Range** mit 206/416, `accept-ranges: bytes`), rohe Response (gestreamt), `private, max-age=3600`, `nosniff`; `full` mit `content-disposition: attachment`; eigenes Rate-Limit `IMAGE_RATE_LIMIT` (1200/60 s, #23 – das Standardlimit 120/60 s gilt je Endpunktmuster, also für alle Bilder zusammen) |
 | GET `/principals` | gallery.view | Query `search` (2–100 Zeichen) → `searchPrincipals`; nur mit `create`/`edit-all`/eigener Galerie/`edit`-Freigabe (sonst 403), 60/60 s; Mitglieder nur mit `members.member.view`, E-Mail nur mit `core.users.view` |
 | GET `/events` | gallery.view | Terminsuche (`search`, `limit` 1–50) über den `events`-Dienst, nur sichtbare Termine; ohne `events` bzw. ohne `events.event.view` → `[]` |
-| GET `/website/galleries` | **website.read** | nur `public`: `id`, `title`, `description`, `imageCount`, `cover`, `events` (nur `onWebsite`), `updatedAt`; `eventId` = nur Galerien zu diesem Website-Termin (sonst leer); `limit`/`offset`; Rate-Limit 120/60 s |
+| GET `/website/galleries` | **website.read** | nur `public`, sortiert wie intern (mit Website-Terminen): `id`, `title`, `description`, `startsOn`, `endsOn`, `imageCount`, `cover`, `events` (nur `onWebsite`), `updatedAt`; `eventId` = nur Galerien zu diesem Website-Termin (sonst leer); `limit`/`offset`; Rate-Limit 120/60 s |
 | GET `/website/galleries/:id` | **website.read** | öffentliche Galerie (mit `events`, nur `onWebsite`) + Bilder (`id`, Beschreibung, Maße, `position`, `mediaType`, `durationSeconds`); privat → 404 |
 | GET `/website/galleries/:id/images/:imageId/:variant` | **website.read** | nur `thumb\|web\|video` (`full` → 422; `video` mit Range, Dateiname `<imageId>.<ext>`, bei Bildern 404), Bild einer privaten Galerie → 404, Rate-Limit `IMAGE_RATE_LIMIT` (1200/60 s), `public, max-age=86400` |
 
-Audit: `galleries.gallery.created|updated|deleted|cover_changed|published|unpublished`, `galleries.image.uploaded|updated|deleted|bulk_updated` –
+Audit: `galleries.gallery.created|updated|deleted|cover_changed|published|unpublished|downloaded`, `galleries.image.uploaded|updated|deleted|bulk_updated` –
 `target` = ID, metadata nur IDs/Zähler/`visibility`, **keine** Beschreibungen oder Dateinamen.
+
+## Zeitraum und Sortierung (1.6.0, 2026-11-20)
+- Galerie hat optional `startsOn`/`endsOn` (Wunsch des Nutzers: „damit sie richtig sortiert werden“). Anzeige mit `formatRefRange` (Karte, Detailkopf).
+- **Sortierung** `GET /galleries` und `GET /website/galleries` (Nutzerentscheidung): eigenes Startdatum, sonst Beginn des **frühesten** verknüpften Termins,
+  sonst Anlagedatum (Berliner Kalendertag), **neueste zuerst**; Gleichstand: `updated_at` absteigend, Titel, ID.
+- Termine liegen in `mod_events` → Sortierung **in der App**: alle passenden Galerien (nur Sortierdaten) laden, Termine über den `events`-Dienst
+  (`describeEvents` mit dem Aufrufer-Kontext bzw. `websiteEventRefs` mit „auf der Website“) auflösen, sortieren, Seite ausschneiden, volle Daten nur für die Seite.
+  Unsichtbare Termine zählen also nicht; ändert sich ein Termindatum, ändert sich die Reihenfolge sofort. Aufwand wächst mit der Zahl der Galerien (für einen Stamm unkritisch).
+- Widget, Suche und `refs.service.ts` sortieren weiter nach „zuletzt geändert“.
 
 ## Website-Anbindung
 - Nur Galerien mit `visibility = public`, nur öffentliche Felder (`WebsiteGallery`, `WebsiteImage`): keine Freigaben,
@@ -184,6 +197,8 @@ Audit: `galleries.gallery.created|updated|deleted|cover_changed|published|unpubl
   Modul aus → 404), `galleries-images.test.ts` (Upload mit `tests/helpers/fake-storage.ts`, Titelbild-Fallback, Termin-Zuordnung der Galerie
   mit/ohne `events`, Sammelaktionen), `galleries-website.test.ts` (nur `public`, Felder, Varianten, Key nur mit Scope → 403 intern),
   `events-refs.test.ts` (Dienst `EventRefsService`); „nur intern“ (PUT, Sammelaktion, Website-Detail/Liste/Titelbild/Datei, Verweis-Dienst) in `galleries-website.test.ts`.
+- Zeitraum/Sortierung/ZIP: Unit `galleries-dates.test.ts` (Schema, `compareGalleries`, `uniqueNames`), Integration `galleries-dates-download.test.ts`
+  (POST/PUT/422, Sortierung intern + Website + Blättern, ZIP-Inhalt per `unzipSync`, 403/404/422, Audit).
 - Videos: Unit `galleries-video.test.ts` (Erkennung, Metadaten MP4/MOV/WebM, `parseRange`/`sliceStream`, Schema-Hilfen), Integration `galleries-videos.test.ts`
   (`/limits`, 422 ohne Videotypen, Upload MP4/MOV/WebM, Ablehnungen, 403, Range 200/206/416, Website, Löschen, Audit); synthetische Testdateien in `tests/video-fixtures.ts`.
   Nicht geprüft: Vorschaubild und Abspielen im echten Browser/iOS, echter S3.

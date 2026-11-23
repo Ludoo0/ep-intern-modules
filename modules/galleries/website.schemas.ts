@@ -19,6 +19,8 @@ export const websiteGallerySchema = z
 		id: z.string(),
 		title: z.string(),
 		description: z.string().nullable(),
+		startsOn: isoDate.nullable(),
+		endsOn: isoDate.nullable(),
 		imageCount: z.number().int().min(0),
 		cover: z
 			.object({ imageId: z.string(), width: z.number(), height: z.number() })

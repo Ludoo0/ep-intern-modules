@@ -324,7 +324,9 @@ describe('Modul galleries (Smoke)', () => {
 			.from(schema.permission)
 			.where(eq(schema.permission.moduleId, 'galleries'));
 		expect(perms.map((p) => p.key).sort()).toEqual([
+			'galleries.ai.use',
 			'galleries.gallery.create',
+			'galleries.gallery.download',
 			'galleries.gallery.edit-all',
 			'galleries.gallery.publish',
 			'galleries.gallery.view',

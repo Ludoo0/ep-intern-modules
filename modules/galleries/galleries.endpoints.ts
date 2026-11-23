@@ -20,6 +20,10 @@ import {
 } from './access';
 import { db, effectiveCoverSql, removeFiles } from './files';
 import {
+	CREATED_ON_SQL,
+	ENDS_ON_SQL,
+	STARTS_ON_SQL,
+	compareGalleries,
 	describeEvents,
 	eventIdsByGallery,
 	finishDetail,
@@ -28,6 +32,7 @@ import {
 	loadEventIds,
 	pickEvents,
 	replaceGalleryEvents,
+	sortRowOf,
 	validateEventIds
 } from './galleries.service';
 import {
@@ -72,6 +77,9 @@ export const galleriesEndpoints = [
 		method: 'GET',
 		path: '/galleries',
 		summary: 'Sichtbare Galerien (Suche, Sichtbarkeit, Termin)',
+		description:
+			'Sortiert nach Datum, neueste zuerst: eigenes Startdatum, sonst Beginn des frühesten ' +
+			'(sichtbaren) Termins, sonst Anlagedatum; bei Gleichstand zuletzt geändert zuerst.',
 		tags,
 		permission: 'galleries.gallery.view',
 		query: listQuery,
@@ -89,22 +97,50 @@ export const galleriesEndpoints = [
 			}
 			const where = sql.join(conds, sql` AND `);
 
-			const page = await db().transaction(async (tx) => {
-				const [count] = await rowsOf(
+			// 1. Alle passenden Galerien (nur Sortierdaten) samt Termin-IDs
+			const all = await db().transaction(async (tx) => {
+				const rows = await rowsOf(
 					tx,
-					sql`SELECT count(*)::int AS total FROM galleries g WHERE ${where}`
+					sql`SELECT g.id, g.title, g.updated_at,
+							${STARTS_ON_SQL} AS starts_on, ${CREATED_ON_SQL} AS created_on
+						FROM galleries g WHERE ${where}`
 				);
+				const eventIds = await eventIdsByGallery(
+					tx,
+					rows.map((r) => String(r.id))
+				);
+				return { rows, eventIds };
+			});
+			// 2. Termine nach der Transaktion auflösen (events-Dienst, nur für den Aufrufer sichtbare)
+			const refs = await describeEvents(ctx, [...all.eventIds.values()].flat());
+			const eventsOf = (id: string) => pickEvents(all.eventIds.get(id) ?? [], refs);
+			// 3. Sortieren (Zeitraum ?? frühester Termin ?? Anlagedatum) und Seite ausschneiden
+			const sorted = all.rows
+				.map((r) =>
+					sortRowOf(
+						r,
+						eventsOf(String(r.id)).map((e) => e.startsOn)
+					)
+				)
+				.sort(compareGalleries);
+			const pageIds = sorted.slice(query.offset, query.offset + query.limit).map((g) => g.id);
+			if (pageIds.length === 0) return { items: [], total: sorted.length };
+
+			// 4. Volle Daten nur für die Seite
+			const page = await db().transaction(async (tx) => {
 				const rows = await rowsOf(
 					tx,
 					sql`SELECT g.id, g.title, g.description, g.visibility, g.owner_id,
 							g.created_at, g.updated_at,
+							${STARTS_ON_SQL} AS starts_on, ${ENDS_ON_SQL} AS ends_on,
 							(SELECT count(*)::int FROM gallery_images x WHERE x.gallery_id = g.id) AS image_count,
 							c.id AS cover_id, c.width AS cover_width, c.height AS cover_height
 						FROM galleries g
 						LEFT JOIN gallery_images c ON c.id = ${effectiveCoverSql}
-						WHERE ${where}
-						ORDER BY g.updated_at DESC, g.title, g.id
-						LIMIT ${query.limit} OFFSET ${query.offset}`
+						WHERE g.id IN (${sql.join(
+							pageIds.map((id) => sql`${id}`),
+							sql`, `
+						)})`
 				);
 				const access = await accessForMany(
 					tx,
@@ -112,41 +148,37 @@ export const galleriesEndpoints = [
 					rows.map((r) => ({ id: String(r.id), ownerId: String(r.owner_id) })),
 					keys
 				);
-				const eventIds = await eventIdsByGallery(
-					tx,
-					rows.map((r) => String(r.id))
-				);
-				const items: Omit<GalleryItem, 'events'>[] = rows.map((r) => {
-					const id = String(r.id);
-					return {
-						id,
-						title: String(r.title),
-						description: r.description == null ? null : String(r.description),
-						visibility: String(r.visibility) as Visibility,
-						imageCount: Number(r.image_count),
-						cover:
-							r.cover_id == null
-								? null
-								: {
-										imageId: String(r.cover_id),
-										width: Number(r.cover_width),
-										height: Number(r.cover_height)
-									},
-						ownerId: String(r.owner_id),
-						access: access.get(id) ?? { level: 'read', isOwner: false },
-						createdAt: toIso(r.created_at),
-						updatedAt: toIso(r.updated_at)
-					};
-				});
-				return { items, eventIds, total: Number(count?.total ?? 0) };
+				return { rows, access };
 			});
-			// Termine nach der Transaktion auflösen (events-Dienst, nur sichtbare)
-			const refs = await describeEvents(ctx, [...page.eventIds.values()].flat());
-			const items: GalleryItem[] = page.items.map((item) => ({
-				...item,
-				events: pickEvents(page.eventIds.get(item.id) ?? [], refs)
-			}));
-			return { items, total: page.total };
+			const byId = new Map(page.rows.map((r) => [String(r.id), r]));
+			const items: GalleryItem[] = [];
+			for (const id of pageIds) {
+				const r = byId.get(id);
+				if (!r) continue; // zwischenzeitlich gelöscht
+				items.push({
+					id,
+					title: String(r.title),
+					description: r.description == null ? null : String(r.description),
+					visibility: String(r.visibility) as Visibility,
+					startsOn: r.starts_on == null ? null : String(r.starts_on),
+					endsOn: r.ends_on == null ? null : String(r.ends_on),
+					imageCount: Number(r.image_count),
+					cover:
+						r.cover_id == null
+							? null
+							: {
+									imageId: String(r.cover_id),
+									width: Number(r.cover_width),
+									height: Number(r.cover_height)
+								},
+					events: eventsOf(id),
+					ownerId: String(r.owner_id),
+					access: page.access.get(id) ?? { level: 'read', isOwner: false },
+					createdAt: toIso(r.created_at),
+					updatedAt: toIso(r.updated_at)
+				});
+			}
+			return { items, total: sorted.length };
 		}
 	}),
 
@@ -184,10 +216,10 @@ export const galleriesEndpoints = [
 			const data = await db().transaction(async (tx) => {
 				await tx.execute(
 					sql`INSERT INTO galleries (id, title, description, visibility, owner_id, created_by,
-							public_confirmed_at, public_confirmed_by)
+							public_confirmed_at, public_confirmed_by, starts_on, ends_on)
 						VALUES (${id}, ${body.title}, ${body.description}, ${body.visibility},
 							${ownerId}, ${ownerId}, ${publishing ? sql`now()` : null},
-							${publishing ? ownerId : null})`
+							${publishing ? ownerId : null}, ${body.startsOn}::date, ${body.endsOn}::date)`
 				);
 				await replaceShares(tx, ctx, id, body.shares);
 				await replaceGalleryEvents(tx, id, body.eventIds);
@@ -290,7 +322,8 @@ export const galleriesEndpoints = [
 				await requireAccess(tx, ctx, params.id, keys, 'edit');
 				await tx.execute(
 					sql`UPDATE galleries SET title = ${body.title}, description = ${body.description},
-							visibility = ${body.visibility}, updated_at = now()
+							visibility = ${body.visibility}, starts_on = ${body.startsOn}::date,
+							ends_on = ${body.endsOn}::date, updated_at = now()
 						WHERE id = ${params.id}`
 				);
 				if (publishing) {

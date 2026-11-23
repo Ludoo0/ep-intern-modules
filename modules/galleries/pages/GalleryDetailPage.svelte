@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+	import CalendarDays from '@lucide/svelte/icons/calendar-days';
+	import Download from '@lucide/svelte/icons/download';
 	import Ellipsis from '@lucide/svelte/icons/ellipsis';
 	import Globe from '@lucide/svelte/icons/globe';
 	import Lock from '@lucide/svelte/icons/lock';
@@ -9,7 +12,7 @@
 	import SquareCheck from '@lucide/svelte/icons/square-check';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import X from '@lucide/svelte/icons/x';
-	import { ApiClientError, apiFetch } from '$lib/sdk/client';
+	import { ApiClientError, apiFetch, can } from '$lib/sdk/client';
 	import type { ModulePageProps } from '$lib/sdk/types/module-ui';
 	import type { PrincipalInfo } from '$lib/sdk/types/sharing';
 	import { Badge } from '$lib/components/ui/badge';
@@ -28,6 +31,7 @@
 	} from '$lib/components/layout';
 	import { shareKey } from '$lib/components/layout/share-types';
 	import {
+		DOWNLOAD_PERMISSION,
 		SHARE_LEVELS,
 		SHARE_LEVEL_LABELS,
 		VISIBILITY_LABELS,
@@ -36,6 +40,7 @@
 		type ShareLevel
 	} from '../schemas';
 	import EventBadges from './EventBadges.svelte';
+	import { formatRefRange } from './event-format';
 	import GalleryDialog from './GalleryDialog.svelte';
 	import ImageBulkBar from './ImageBulkBar.svelte';
 	import ImageGrid from './ImageGrid.svelte';
@@ -61,6 +66,13 @@
 	let viewerIndex = $state(0);
 
 	const canEdit = $derived(detail?.access.level === 'edit');
+	const canDownload = $derived(can((page.data.permissions ?? []) as string[], DOWNLOAD_PERMISSION));
+
+	/** Ganze Galerie als ZIP (der Browser lädt direkt herunter, Session-Cookie reicht) */
+	function downloadZip() {
+		if (!detail || detail.imageCount === 0) return;
+		window.location.href = `/api/v1${BASE}/galleries/${encodeURIComponent(detail.id)}/download`;
+	}
 	const images = $derived(detail?.images ?? []);
 	const galleryUrl = $derived(`${BASE}/galleries/${id}`);
 
@@ -144,6 +156,8 @@
 			description: detail.description,
 			visibility: detail.visibility,
 			eventIds: detail.events.map((e) => e.id),
+			startsOn: detail.startsOn,
+			endsOn: detail.endsOn,
 			shares: next.map((s) => ({
 				type: s.type ?? 'user',
 				id: s.userId,
@@ -307,6 +321,8 @@
 							<Button variant="outline" onclick={() => (editOpen = true)}>
 								<Pencil /> Bearbeiten
 							</Button>
+						{/if}
+						{#if canEdit || canDownload}
 							<DropdownMenu.Root>
 								<DropdownMenu.Trigger>
 									{#snippet child({ props })}
@@ -315,16 +331,32 @@
 										</Button>
 									{/snippet}
 								</DropdownMenu.Trigger>
-								<DropdownMenu.Content align="end" class="w-48">
-									<DropdownMenu.Item variant="destructive" onclick={() => (deleteOpen = true)}>
-										<Trash2 /> Löschen
-									</DropdownMenu.Item>
+								<DropdownMenu.Content align="end" class="w-56">
+									{#if canDownload}
+										<DropdownMenu.Item disabled={detail.imageCount === 0} onclick={downloadZip}>
+											<Download /> Als ZIP herunterladen
+										</DropdownMenu.Item>
+									{/if}
+									{#if canEdit}
+										{#if canDownload}
+											<DropdownMenu.Separator />
+										{/if}
+										<DropdownMenu.Item variant="destructive" onclick={() => (deleteOpen = true)}>
+											<Trash2 /> Löschen
+										</DropdownMenu.Item>
+									{/if}
 								</DropdownMenu.Content>
 							</DropdownMenu.Root>
 						{/if}
 					{/if}
 				{/snippet}
 			</PageHeader>
+			{#if detail.startsOn}
+				<p class="mt-3 flex items-center gap-1.5 text-sm text-muted-foreground">
+					<CalendarDays class="size-4" aria-hidden="true" />
+					{formatRefRange({ startsOn: detail.startsOn, endsOn: detail.endsOn })}
+				</p>
+			{/if}
 			<EventBadges events={detail.events} class="mt-3" />
 			{#if detail.visibility === 'public' && detail.publicConfirmation}
 				<p class="mt-2 text-xs text-muted-foreground">

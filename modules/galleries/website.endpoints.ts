@@ -26,6 +26,13 @@ import {
 	rangeFileResponse,
 	websiteCoverSql
 } from './files';
+import {
+	CREATED_ON_SQL,
+	ENDS_ON_SQL,
+	STARTS_ON_SQL,
+	compareGalleries,
+	sortRowOf
+} from './galleries.service';
 import { durationOf, mediaTypeOf } from './images.service';
 import {
 	idParams,
@@ -66,6 +73,8 @@ function galleryOf(r: Row, events: WebsiteEventRef[]): WebsiteGallery {
 		id: String(r.id),
 		title: String(r.title),
 		description: textOrNull(r.description),
+		startsOn: textOrNull(r.starts_on),
+		endsOn: textOrNull(r.ends_on),
 		imageCount: Number(r.image_count ?? 0),
 		cover: coverOf(r),
 		events,
@@ -75,6 +84,7 @@ function galleryOf(r: Row, events: WebsiteEventRef[]): WebsiteGallery {
 
 /** Spalten für Galerien inkl. Bildanzahl und Titelbild – nur nicht private Bilder (Alias `g`, Join `c`) */
 const GALLERY_SELECT = sql`SELECT g.id, g.title, g.description, g.updated_at,
+	${STARTS_ON_SQL} AS starts_on, ${ENDS_ON_SQL} AS ends_on,
 	(SELECT count(*)::int FROM gallery_images x WHERE x.gallery_id = g.id AND NOT x.is_private) AS image_count,
 	c.id AS cover_id, c.width AS cover_width, c.height AS cover_height
 	FROM galleries g
@@ -149,8 +159,9 @@ export const websiteEndpoints: AnyApiEndpoint[] = [
 			'Öffentliche Galerien für die Stammeswebsite (API-Key mit Scope galleries.website.read)',
 		description:
 			'Liefert `{ items, total }` mit allen Galerien, die auf „öffentlich“ stehen (unabhängig von ' +
-			'Freigaben), neueste Änderung zuerst (`updatedAt` absteigend, dann Titel). Je Galerie: ' +
-			'Titel, Beschreibung, Bildanzahl und effektives Titelbild (`cover`: gesetztes Titelbild oder ' +
+			'Freigaben), nach Datum sortiert, neueste zuerst (`startsOn`, sonst Beginn des frühesten ' +
+			'Website-Termins, sonst Anlagedatum; bei Gleichstand zuletzt geändert). Je Galerie: ' +
+			'Titel, Beschreibung, Zeitraum (`startsOn`/`endsOn`, optional), Bildanzahl und effektives Titelbild (`cover`: gesetztes Titelbild oder ' +
 			'das zuerst hochgeladene Bild, `null` ohne Bilder). Bilder mit „nur intern“ zählen nicht mit ' +
 			'und werden nie Titelbild. Nur öffentliche Felder: keine ' +
 			'Freigaben, Eigentümer*innen, Dateinamen oder Uploader. `events` = zugeordnete Termine, ' +
@@ -170,26 +181,48 @@ export const websiteEndpoints: AnyApiEndpoint[] = [
 				? sql`g.visibility = 'public' AND EXISTS (SELECT 1 FROM gallery_events ge
 						WHERE ge.gallery_id = g.id AND ge.event_id = ${query.eventId})`
 				: sql`g.visibility = 'public'`;
-			const { rows, links, total } = await db().transaction(async (tx) => {
-				const rows = await rowsOf(
+			// Sortierdaten aller öffentlichen Galerien, sortiert wie intern (Zeitraum ?? frühester
+			// Website-Termin ?? Anlagedatum), danach volle Daten nur für die Seite
+			const { all, links } = await db().transaction(async (tx) => {
+				const all = await rowsOf(
 					tx,
-					sql`${GALLERY_SELECT}
-						WHERE ${where}
-						ORDER BY g.updated_at DESC, g.title ASC, g.id ASC
-						LIMIT ${query.limit} OFFSET ${query.offset}`
-				);
-				const [count] = await rowsOf(
-					tx,
-					sql`SELECT count(*)::int AS n FROM galleries g WHERE ${where}`
+					sql`SELECT g.id, g.title, g.updated_at,
+							${STARTS_ON_SQL} AS starts_on, ${CREATED_ON_SQL} AS created_on
+						FROM galleries g WHERE ${where}`
 				);
 				const links = await linksFor(
 					tx,
-					rows.map((r) => String(r.id))
+					all.map((r) => String(r.id))
 				);
-				return { rows, links, total: Number(count?.n ?? 0) };
+				return { all, links };
 			});
 			const events = await eventsByGallery(links);
-			return { items: rows.map((r) => galleryOf(r, events.get(String(r.id)) ?? [])), total };
+			const sorted = all
+				.map((r) =>
+					sortRowOf(
+						r,
+						(events.get(String(r.id)) ?? []).map((e) => e.startsOn)
+					)
+				)
+				.sort(compareGalleries);
+			const pageIds = sorted.slice(query.offset, query.offset + query.limit).map((g) => g.id);
+			if (pageIds.length === 0) return { items: [] as WebsiteGallery[], total: sorted.length };
+			const rows = await db().transaction((tx) =>
+				rowsOf(
+					tx,
+					sql`${GALLERY_SELECT}
+						WHERE g.visibility = 'public' AND g.id IN (${sql.join(
+							pageIds.map((id) => sql`${id}`),
+							sql`, `
+						)})`
+				)
+			);
+			const byId = new Map(rows.map((r) => [String(r.id), r]));
+			const items = pageIds
+				.map((id) => byId.get(id))
+				.filter((r): r is Row => !!r)
+				.map((r) => galleryOf(r, events.get(String(r.id)) ?? []));
+			return { items, total: sorted.length };
 		}
 	}),
 	defineEndpoint({

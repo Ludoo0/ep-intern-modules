@@ -54,6 +54,61 @@ export async function everyoneLabel(): Promise<string> {
 	return DEFAULT_EVERYONE_LABEL;
 }
 
+// ---------------------------------------------------------------------------
+// Sortierung der Listen (Zeitraum ?? frühester Termin ?? Anlagedatum)
+// ---------------------------------------------------------------------------
+
+/** SQL-Ausdrücke für die Datumsfelder (Alias `g`) als `YYYY-MM-DD` (ohne Zeitzonen-Effekte) */
+export const STARTS_ON_SQL = sql`to_char(g.starts_on, 'YYYY-MM-DD')`;
+export const ENDS_ON_SQL = sql`to_char(g.ends_on, 'YYYY-MM-DD')`;
+/** Anlagedatum als Kalendertag in Berlin */
+export const CREATED_ON_SQL = sql`to_char(g.created_at AT TIME ZONE 'Europe/Berlin', 'YYYY-MM-DD')`;
+
+/** Daten einer Galerie für die Sortierung */
+export interface GallerySortRow {
+	id: string;
+	title: string;
+	/** Eigenes Startdatum `YYYY-MM-DD` oder `null` */
+	startsOn: string | null;
+	/** Anlagedatum (Berlin) `YYYY-MM-DD` */
+	createdOn: string;
+	/** Zeitpunkt der letzten Änderung (ms) für Gleichstände */
+	updatedMs: number;
+	/** Startdaten der (für den Aufrufer sichtbaren) verknüpften Termine */
+	eventStarts: readonly string[];
+}
+
+/** Sortierdatum: eigenes Startdatum, sonst frühester Termin, sonst Anlagedatum */
+export function gallerySortDate(
+	g: Pick<GallerySortRow, 'startsOn' | 'createdOn' | 'eventStarts'>
+): string {
+	if (g.startsOn) return g.startsOn;
+	let first: string | null = null;
+	for (const d of g.eventStarts) if (!first || d < first) first = d;
+	return first ?? g.createdOn;
+}
+
+/** Neueste zuerst; bei gleichem Datum zuletzt geändert zuerst, dann Titel, dann ID */
+export function compareGalleries(a: GallerySortRow, b: GallerySortRow): number {
+	const da = gallerySortDate(a);
+	const dbb = gallerySortDate(b);
+	if (da !== dbb) return da < dbb ? 1 : -1;
+	if (a.updatedMs !== b.updatedMs) return b.updatedMs - a.updatedMs;
+	return a.title.localeCompare(b.title, 'de') || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+
+/** Zeile aus `SELECT g.id, g.title, <STARTS_ON_SQL> AS starts_on, <CREATED_ON_SQL> AS created_on, g.updated_at` */
+export function sortRowOf(r: Row, eventStarts: readonly string[]): GallerySortRow {
+	return {
+		id: String(r.id),
+		title: String(r.title),
+		startsOn: textOrNull(r.starts_on),
+		createdOn: String(r.created_on),
+		updatedMs: new Date(toIso(r.updated_at)).getTime(),
+		eventStarts
+	};
+}
+
 /** `%`, `_` und `\` für ILIKE maskieren */
 export const likePattern = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
@@ -129,9 +184,10 @@ export async function loadDetailData(
 	const access = await requireAccess(tx, ctx, galleryId, keys, 'read');
 	const [gallery] = await rowsOf(
 		tx,
-		sql`SELECT id, title, description, visibility, owner_id, created_at, updated_at,
-				public_confirmed_at, public_confirmed_by
-			FROM galleries WHERE id = ${galleryId}`
+		sql`SELECT g.id, g.title, g.description, g.visibility, g.owner_id, g.created_at, g.updated_at,
+				g.public_confirmed_at, g.public_confirmed_by,
+				${STARTS_ON_SQL} AS starts_on, ${ENDS_ON_SQL} AS ends_on
+			FROM galleries g WHERE g.id = ${galleryId}`
 	);
 	if (!gallery) throw errors.notFound('Galerie nicht gefunden');
 	const images = await rowsOf(
@@ -266,6 +322,8 @@ export async function finishDetail(ctx: RequestContext, d: DetailData): Promise<
 		title: String(d.gallery.title),
 		description: textOrNull(d.gallery.description),
 		visibility: String(d.gallery.visibility) as Visibility,
+		startsOn: textOrNull(d.gallery.starts_on),
+		endsOn: textOrNull(d.gallery.ends_on),
 		imageCount: images.length,
 		cover: d.cover
 			? { imageId: d.cover.imageId, width: d.cover.width, height: d.cover.height }

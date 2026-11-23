@@ -31,7 +31,9 @@ describe('galleryInput', () => {
 			description: null,
 			visibility: 'private',
 			shares: [],
-			eventIds: []
+			eventIds: [],
+			startsOn: null,
+			endsOn: null
 		});
 	});
 
